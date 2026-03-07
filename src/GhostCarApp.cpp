@@ -491,7 +491,33 @@ void GhostCarApp::applyGhostTransparency() {
     }
 }
 
-void GhostCarApp::updateGhostCarTransform(float x, float y, float z, float yRotRad) {
+float GhostCarApp::computePitch(const VboFile& vbo, int sampleIdx, int windowSamples) {
+    // Look windowSamples ahead and behind to get a smoothed pitch angle
+    int n = (int)vbo.samples.size();
+    int idxBefore = std::max(0, sampleIdx - windowSamples);
+    int idxAfter = std::min(n - 1, sampleIdx + windowSamples);
+
+    if (idxBefore == idxAfter) return 0.0f;
+
+    const auto& sBefore = vbo.samples[idxBefore];
+    const auto& sAfter = vbo.samples[idxAfter];
+
+    double heightDiff = sAfter.height - sBefore.height;
+
+    // Compute horizontal distance between the two samples
+    double eastB, northB, eastA, northA;
+    gpsToLocalMeters(sBefore.latitude, sBefore.longitude,
+                     sBefore.latitude, sBefore.longitude, eastB, northB);
+    gpsToLocalMeters(sAfter.latitude, sAfter.longitude,
+                     sBefore.latitude, sBefore.longitude, eastA, northA);
+
+    double horizDist = sqrt(eastA * eastA + northA * northA);
+    if (horizDist < 0.1) return 0.0f;  // too close, skip
+
+    return (float)atan2(heightDiff, horizDist);
+}
+
+void GhostCarApp::updateGhostCarTransform(float x, float y, float z, float yRotRad, float pitchRad) {
     if (!mGhostAsset) return;
     auto& tcm = mEngine->getTransformManager();
     auto ti = tcm.getInstance(mGhostAsset->getRoot());
@@ -500,6 +526,7 @@ void GhostCarApp::updateGhostCarTransform(float x, float y, float z, float yRotR
     float rotOffset = mModelRotOffset * (float)M_PI / 180.0f;
     mat4f transform = mat4f::translation(float3{x, y, z}) *
                       mat4f::rotation(yRotRad + rotOffset, float3{0, 1, 0}) *
+                      mat4f::rotation(pitchRad, float3{1, 0, 0}) *
                       mat4f::scaling(float3{mGhostScale, mGhostScale, mGhostScale});
     tcm.setTransform(ti, transform);
 }
@@ -777,8 +804,10 @@ void GhostCarApp::buildImGuiPanel() {
                 if (mVideoOpen) {
                     // Seek video to start of camera lap
                     mVideoCapture.set(cv::CAP_PROP_POS_MSEC, camLap.startAviTime);
-                    mPlayStartTime = SDL_GetPerformanceCounter() / (double)SDL_GetPerformanceFrequency();
+                    double now = SDL_GetPerformanceCounter() / (double)SDL_GetPerformanceFrequency();
+                    mPlayStartTime = now;
                     mPlayElapsedSec = 0;
+                    mNextFrameTime = now;
                     mPlaying = true;
                     mPaused = false;
                     showGhostCar();
@@ -788,8 +817,9 @@ void GhostCarApp::buildImGuiPanel() {
             if (ImGui::Button(mPaused ? "Resume" : "Pause")) {
                 mPaused = !mPaused;
                 if (!mPaused) {
-                    mPlayStartTime = SDL_GetPerformanceCounter() / (double)SDL_GetPerformanceFrequency()
-                                     - mPlayElapsedSec;
+                    double now = SDL_GetPerformanceCounter() / (double)SDL_GetPerformanceFrequency();
+                    mPlayStartTime = now - mPlayElapsedSec / mPlaybackSpeed;
+                    mNextFrameTime = now;
                 }
             }
             ImGui::SameLine();
@@ -809,6 +839,15 @@ void GhostCarApp::buildImGuiPanel() {
             double elSec = mPlayElapsedSec - elMin * 60.0;
             ImGui::Text("Elapsed: %d:%05.2f / %.1f s", elMin, elSec, lapDuration);
         }
+
+        if (ImGui::SliderFloat("Speed", &mPlaybackSpeed, 0.1f, 5.0f, "%.1fx")) {
+            // Recalculate start time so elapsed stays consistent at new speed
+            if (mPlaying && !mPaused) {
+                double now = SDL_GetPerformanceCounter() / (double)SDL_GetPerformanceFrequency();
+                mPlayStartTime = now - mPlayElapsedSec / mPlaybackSpeed;
+                mNextFrameTime = now;
+            }
+        }
     }
 
     // --- Ghost Car Settings ---
@@ -826,6 +865,7 @@ void GhostCarApp::buildImGuiPanel() {
         ImGui::SliderFloat("Scale", &mGhostScale, 0.1f, 10.0f);
         ImGui::SliderFloat("Y Offset", &mGhostYOffset, -3.0f, 3.0f);
         ImGui::SliderFloat("Rotation Offset", &mModelRotOffset, -180.0f, 180.0f, "%.0f deg");
+        ImGui::Checkbox("Pitch Compensation", &mPitchCompensation);
     }
 
     // --- Camera Settings ---
@@ -858,8 +898,9 @@ void GhostCarApp::run() {
                     else if (event.key.keysym.sym == SDLK_SPACE && mPlaying) {
                         mPaused = !mPaused;
                         if (!mPaused) {
-                            mPlayStartTime = SDL_GetPerformanceCounter() / (double)freq
-                                             - mPlayElapsedSec;
+                            double now = SDL_GetPerformanceCounter() / (double)freq;
+                            mPlayStartTime = now - mPlayElapsedSec / mPlaybackSpeed;
+                            mNextFrameTime = now;
                         }
                     }
                     break;
@@ -887,7 +928,7 @@ void GhostCarApp::run() {
         bool newFrame = false;
         if (mPlaying && !mPaused && mVideoOpen) {
             double now = SDL_GetPerformanceCounter() / (double)freq;
-            mPlayElapsedSec = now - mPlayStartTime;
+            mPlayElapsedSec = (now - mPlayStartTime) * mPlaybackSpeed;
 
             const auto& camLap = mLaps[mCameraLapIdx];
             double lapDuration = camLap.lapTimeSeconds;
@@ -896,11 +937,15 @@ void GhostCarApp::run() {
                 mPlaying = false;
                 hideGhostCar();
             } else {
-                // Read next video frame (sequential read is much faster than seeking every frame)
-                cv::Mat frame;
-                if (mVideoCapture.read(frame) && !frame.empty()) {
-                    uploadVideoFrame(frame);
-                    newFrame = true;
+                // Pace video reads to match playback speed
+                double frameDuration = 1.0 / (mVideoFps * mPlaybackSpeed);
+                while (now >= mNextFrameTime) {
+                    cv::Mat frame;
+                    if (mVideoCapture.read(frame) && !frame.empty()) {
+                        uploadVideoFrame(frame);
+                        newFrame = true;
+                    }
+                    mNextFrameTime += frameDuration;
                 }
 
                 // Find camera car GPS position at this elapsed time
@@ -950,28 +995,35 @@ void GhostCarApp::run() {
                 while (headingDiff < -180.0) headingDiff += 360.0;
                 float ghostYRot = -(float)(headingDiff * M_PI / 180.0);
 
+                // Compute ghost car pitch from height gradient
+                float ghostPitch = mPitchCompensation ? computePitch(mVbo, ghostIdx) : 0.0f;
+
                 if (mGhostVisible && relForward > 0) {
                     showGhostCar();
-                    updateGhostCarTransform(fx, fy, fz, ghostYRot);
+                    updateGhostCarTransform(fx, fy, fz, ghostYRot, ghostPitch);
                 } else {
                     hideGhostCar();
                 }
 
-                // Update camera position
+                // Pitch the 3D camera to match the camera car's road angle
+                // so ghost car moves up/down in frame correctly on hills
+                float camPitch = mPitchCompensation ? computePitch(mVbo, camIdx) : 0.0f;
+                float lookY = mCameraHeight + 100.0f * sinf(-camPitch);
+                float lookZ = -100.0f * cosf(camPitch);
                 mCamera->lookAt(
                     {0, mCameraHeight, 0},
-                    {0, mCameraHeight, -100},
+                    {0, lookY, lookZ},
                     {0, 1, 0});
 
                 // Update title bar
-                char title[256];
+                char title[512];
                 snprintf(title, sizeof(title),
-                    "GhostCar - Lap %d vs %d | %.1fs | cam(%.1f,%.1f) ghost(%.1f,%.1f) dist=%.1fm",
+                    "GhostCar - Lap %d vs %d | %.1fs | dist=%.1fm | camPitch=%.1f° ghostPitch=%.1f°",
                     mLaps[mCameraLapIdx].lapNumber, mLaps[mGhostLapIdx].lapNumber,
                     mPlayElapsedSec,
-                    camSample.latitude, camSample.longitude,
-                    ghostSample.latitude, ghostSample.longitude,
-                    sqrt(dEast * dEast + dNorth * dNorth));
+                    sqrt(dEast * dEast + dNorth * dNorth),
+                    camPitch * 180.0f / (float)M_PI,
+                    ghostPitch * 180.0f / (float)M_PI);
                 SDL_SetWindowTitle(mWindow, title);
             }
         }

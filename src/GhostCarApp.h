@@ -58,7 +58,7 @@ private:
     void createLighting();
     void loadGhostCar();
     void applyGhostTransparency();
-    void updateGhostCarTransform(float x, float y, float z, float yRotRad);
+    void updateGhostCarTransform(float x, float y, float z, float yRotRad, float pitchRad);
     void hideGhostCar();
     void showGhostCar();
     bool uploadVideoFrame(const cv::Mat& frame);
@@ -66,6 +66,7 @@ private:
     void updateSidebarLayout();
     int findSampleAtAviTime(const VboFile& vbo, int startIdx, int endIdx, double aviTimeMs);
     int findSampleAtElapsed(const VboFile& vbo, int startIdx, int endIdx, double elapsedSec);
+    float computePitch(const VboFile& vbo, int sampleIdx, int windowSamples = 5);
 
     // Filament core
     SDL_Window* mWindow = nullptr;
@@ -125,7 +126,9 @@ private:
     bool mPaused = false;
     double mPlayStartTime = 0;
     double mPlayElapsedSec = 0;
+    double mNextFrameTime = 0;  // wall-clock time when next video frame is due
     int mCurrentVideoSampleIdx = 0;
+    float mPlaybackSpeed = 1.0f;
 
     // Ghost car parameters
     float mGhostAlpha = 0.5f;
@@ -136,6 +139,7 @@ private:
     float mModelRotOffset = 180.0f;  // degrees, to align model forward direction
     bool mGhostVisible = true;
     float mGhostScale = 1.3f;
+    bool mPitchCompensation = true;
 
     // ImGui sidebar
     SDL_Window* mControlWindow = nullptr;
@@ -146,7 +150,7 @@ private:
     bool mRunning = true;
 
     // File paths
-    char mVboPath[512] = "";
+    char mVboPath[512] = "C:\\Users\\julia\\Dropbox\\Claude Code\\GhostCar\\VBOX data\\VBOX0006.vbo";
     char mDbPath[512] = "";
     bool mVboLoaded = false;
 
