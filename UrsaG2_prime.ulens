@@ -1,0 +1,43 @@
+{
+  "Metadata": {
+    "LensInfo": {
+      "SerialNumber": "None",
+      "ModelName": "None",
+      "DistortionModel": "Spherical"
+    },
+    "Name": "ExportedLens",
+    "NodalOffsetCoordinateSystem": "OpenCV",
+    "FxFyUnits": "Normalized",
+    "CxCyUnits": "Normalized",
+    "UserMetadata": [],
+    "Type": "LensFile",
+    "Version": "0.0.0"
+  },
+  "SensorDimensions": {
+    "Width": 23.100000381469727,
+    "Height": 12.989999771118164,
+    "Units": "Millimeters"
+  },
+  "ImageDimensions": {
+    "Width": 1920,
+    "Height": 1080
+  },
+  "CameraParameterTables": [
+    {
+      "ParameterName": "FocalLengthTable",
+      "Header": "FocusEncoder,ZoomEncoder,Fx,Fy",
+      "Data": "0.0,0.0,1.07451593875885,1.9132840633392334"
+    },
+    {
+      "ParameterName": "ImageCenterTable",
+      "Header": "FocusEncoder,ZoomEncoder,Cx,Cy",
+      "Data": "0.0,0.0,0.5235986113548279,0.4215720295906067"
+    },
+    {
+      "ParameterName": "DistortionTable",
+      "Header": "FocusEncoder,ZoomEncoder,K1,K2,K3,P1,P2",
+      "Data": "0.0,0.0,-0.10296139866113663,0.16323186457157135,-0.26044169068336487,-0.007493514567613602,0.0034540495835244656"
+    }
+  ],
+  "EncoderTables": []
+}

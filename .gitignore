@@ -1,0 +1,29 @@
+# Build output
+build/
+
+# Dependencies (too large for git - 5.8GB)
+deps/
+
+# Large binary assets
+*.glb
+!AirPixel_logo.glb
+*.mp4
+*.blend
+*.blend1
+*.csv
+assets/
+
+# Temporary files
+*.tmp.*
+nul
+
+# IDE / Editor
+.vs/
+.vscode/
+*.user
+*.suo
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store

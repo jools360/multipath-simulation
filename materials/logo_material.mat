@@ -1,0 +1,29 @@
+material {
+    name : LogoUnlit,
+    shadingModel : unlit,
+    blending : masked,
+    maskThreshold : 0.5,
+    doubleSided : true,
+    parameters : [
+        {
+            type : sampler2d,
+            name : baseColorMap
+        },
+        {
+            type : float3,
+            name : emissive
+        }
+    ],
+    requires : [
+        uv0
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        vec4 texColor = texture(materialParams_baseColorMap, getUV0());
+        material.baseColor = texColor;
+        material.baseColor.rgb += materialParams.emissive;
+    }
+}

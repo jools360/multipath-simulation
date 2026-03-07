@@ -1,0 +1,347 @@
+================================================================================
+VIPS Universal Protocol Format Specification
+================================================================================
+
+This document describes the binary message format used by AirPixel and VIPS
+positioning systems. The format is identified by the header bytes 0x24 0xD9.
+
+================================================================================
+1. MESSAGE STRUCTURE OVERVIEW
+================================================================================
+
+    +--------+--------+----------+-------+------+-----+-----+-----+
+    | Header | Length | Flags    | Time  |  X   |  Y  |  Z  | ... |
+    +--------+--------+----------+-------+------+-----+-----+-----+
+    | 2 bytes| 2 bytes| 4 bytes  |4 bytes|8 bytes|8 bytes|4 bytes|...
+    +--------+--------+----------+-------+------+-----+-----+-----+
+
+All multi-byte values are LITTLE-ENDIAN.
+
+================================================================================
+2. FIXED HEADER FIELDS
+================================================================================
+
+Offset  Size    Type        Field           Description
+------  ----    ----        -----           -----------
+0       2       byte[2]     Header          Always 0x24 0xD9
+2       2       UInt16      ByteCount       Total message length in bytes
+4       4       UInt32      OutputFlags     Bitmask indicating optional fields
+8       4       UInt32      TimeMS          Time of day in milliseconds (UTC)
+12      8       Double      X               X position (meters or degrees*)
+20      8       Double      Y               Y position (meters or degrees*)
+28      4       Float       Z               Z position / altitude (meters)
+
+* If OUTPUT_GLOBAL_POSITION flag is set, X/Y are latitude/longitude in degrees.
+  Otherwise, X/Y are local coordinates in meters.
+
+================================================================================
+3. OUTPUT FLAGS (Offset 4-7)
+================================================================================
+
+The OutputFlags field is a 32-bit bitmask that indicates which optional
+data sections are present in the message. Fields appear in flag bit order.
+
+Bit     Hex Value   Flag Name               Description
+---     ---------   ---------               -----------
+0       0x0001      OUTPUT_GLOBAL_POSITION  X/Y are lat/lon (not local meters)
+1       0x0002      OUTPUT_STATUS           Status section present
+2       0x0004      OUTPUT_ORIENTATION      Roll/Pitch/Yaw present
+3       0x0008      OUTPUT_VELOCITY         Speed and heading present
+4       0x0010      OUTPUT_VERT_VELOCITY    Vertical velocity present
+5       0x0020      OUTPUT_UNCERTAINTY      Position/orientation std devs
+6       0x0040      OUTPUT_ACCURACY         Residuals and rover ID
+7       0x0080      OUTPUT_RAW_VIPS         Raw UWB position data
+8       0x0100      OUTPUT_RAW_IMU          Raw IMU accelerometer/gyro data
+9       0x0200      OUTPUT_UNIT_ID          Unit identifier (4 bytes)
+10      0x0400      OUTPUT_FIZ_DATA         Focus/Iris/Zoom lens data
+11      0x0800      OUTPUT_ORIGIN           Origin coordinates
+12      0x1000      OUTPUT_USED_IDs         Beacon IDs used (12 bytes)
+13      0x2000      OUTPUT_FIZ_STATUS       FIZ status (4 bytes)
+14      0x4000      OUTPUT_QUATERNIONS      Orientation as quaternion
+15      0x8000      OUTPUT_FIZ_EXTENDED     Extended FIZ with calibration flags
+
+================================================================================
+4. OPTIONAL FIELD DEFINITIONS
+================================================================================
+
+Fields appear in the message in the order listed below, but only if their
+corresponding flag bit is set.
+
+--------------------------------------------------------------------------------
+4.1 OUTPUT_STATUS (Flag 0x0002)
+--------------------------------------------------------------------------------
+Offset* Size    Type        Field           Description
+------  ----    ----        -----           -----------
++0      1       Byte        Beacons         Number of satellites/beacons
++1      1       Byte        SolutionType    Solution quality indicator
++2      2       UInt16      KFStatus        Kalman filter status bits
+
+Solution Type values:
+    0 = No solution
+    1 = Single point
+    2 = DGPS
+    3 = RTK Float
+    4 = RTK Fixed
+    5+ = Vendor specific
+
+--------------------------------------------------------------------------------
+4.2 OUTPUT_ORIENTATION (Flag 0x0004)
+--------------------------------------------------------------------------------
+Offset* Size    Type        Field           Description
+------  ----    ----        -----           -----------
++0      4       Float       Roll            Roll angle (degrees)
++4      4       Float       Pitch           Pitch angle (degrees)
++8      4       Float       Yaw             Yaw/Heading angle (degrees)
+
+--------------------------------------------------------------------------------
+4.3 OUTPUT_VELOCITY (Flag 0x0008)
+--------------------------------------------------------------------------------
+Offset* Size    Type        Field           Description
+------  ----    ----        -----           -----------
++0      4       Float       Speed/Vx        Speed (km/h) or Vx (m/s)*
++4      4       Float       Heading/Vy      Heading (deg) or Vy (m/s)*
+
+* If OUTPUT_GLOBAL_POSITION is set: Speed (km/h) and Heading (degrees)
+* If OUTPUT_GLOBAL_POSITION is NOT set: Vx and Vy in m/s, converted to
+  speed = sqrt(vx^2 + vy^2) * 3.6 and heading = atan2(vy, vx) * 180/PI
+
+--------------------------------------------------------------------------------
+4.4 OUTPUT_VERT_VELOCITY (Flag 0x0010)
+--------------------------------------------------------------------------------
+Offset* Size    Type        Field           Description
+------  ----    ----        -----           -----------
++0      4       Float       VertVelocity    Vertical velocity (m/s)
+
+--------------------------------------------------------------------------------
+4.5 OUTPUT_UNCERTAINTY (Flag 0x0020)
+--------------------------------------------------------------------------------
+Offset* Size    Type        Field           Description
+------  ----    ----        -----           -----------
++0      4       Float       XStdDev         X position std deviation (m)
++4      4       Float       YStdDev         Y position std deviation (m)
++8      4       Float       ZStdDev         Z position std deviation (m)
+
+If OUTPUT_ORIENTATION is also set, additional fields follow:
++12     4       Float       RollStdDev      Roll std deviation (degrees)
++16     4       Float       PitchStdDev     Pitch std deviation (degrees)
++20     4       Float       YawStdDev       Yaw std deviation (degrees)
+
+If OUTPUT_VELOCITY is also set, additional fields follow:
++24     4       Float       VXStdDev        X velocity std deviation
++28     4       Float       VYStdDev        Y velocity std deviation
++32     4       Float       VZStdDev        Z velocity std deviation
+
+--------------------------------------------------------------------------------
+4.6 OUTPUT_ACCURACY (Flag 0x0040)
+--------------------------------------------------------------------------------
+Offset* Size    Type        Field           Description
+------  ----    ----        -----           -----------
++0      1       Byte        PosResidual     Position residual (value / 20.0)
++1      1       Byte        UseFlags        Bit 0: Outside geofence
+                                            Bit 1: Insufficient beacons
++2      1       Byte        VelResidual     Velocity residual (value / 10.0)
++3      1       Byte        RoverID         Rover/unit identifier
+
+--------------------------------------------------------------------------------
+4.7 OUTPUT_RAW_VIPS (Flag 0x0080)
+--------------------------------------------------------------------------------
+Offset* Size    Type        Field           Description
+------  ----    ----        -----           -----------
++0      3       Int24       UWB_X           Raw UWB X (value / 1000.0 = meters)
++3      3       Int24       UWB_Y           Raw UWB Y (value / 1000.0 = meters)
++6      2       Int16       UWB_Z           Raw UWB Z (value / 1000.0 = meters)
++8      2       Int16       UWB_Speed       Raw speed (value / 1000.0 = m/s)
++10     2       Int16       UWB_Heading     Raw heading (value / 100.0 = degrees)
++12     1       Byte        XConf           X confidence (value / 10.0)
++13     1       Byte        YConf           Y confidence (value / 10.0)
++14     1       Byte        ZConf           Z confidence (value / 10.0)
++15     1       Byte        SpeedConf       Speed confidence (value / 10.0)
++16     2       UInt16      PosResidual     Position residual (value / 1000.0)
++18     2       UInt16      VelResidual     Velocity residual (value / 1000.0)
++20     4       UInt32      BeaconMask      Bitmask of beacons used
+
+Int24 is a signed 24-bit integer stored in 3 bytes (little-endian).
+Sign extension required for negative values (check bit 23).
+
+--------------------------------------------------------------------------------
+4.8 OUTPUT_RAW_IMU (Flag 0x0100)
+--------------------------------------------------------------------------------
+Offset* Size    Type        Field           Description
+------  ----    ----        -----           -----------
++0      4       Float       IMU_XAcc        X acceleration
++4      4       Float       IMU_YAcc        Y acceleration
++8      4       Float       IMU_ZAcc        Z acceleration
++12     4       Float       IMU_RollRate    Roll rate (deg/s)
++16     4       Float       IMU_PitchRate   Pitch rate (deg/s)
++20     4       Float       IMU_YawRate     Yaw rate (deg/s)
+
+--------------------------------------------------------------------------------
+4.9 OUTPUT_UNIT_ID (Flag 0x0200)
+--------------------------------------------------------------------------------
+Offset* Size    Type        Field           Description
+------  ----    ----        -----           -----------
++0      4       UInt32      UnitID          Device/unit identifier
+
+--------------------------------------------------------------------------------
+4.10 OUTPUT_FIZ_DATA (Flag 0x0400)
+--------------------------------------------------------------------------------
+Offset* Size    Type        Field           Description
+------  ----    ----        -----           -----------
++0      4       UInt32      Focus           Focus distance (raw or mm)
++4      2       UInt16      Iris            Iris/T-stop (value / 100.0)
++6      2       UInt16      Zoom            Focal length (value / 100.0 = mm)
+
+--------------------------------------------------------------------------------
+4.11 OUTPUT_ORIGIN (Flag 0x0800)
+--------------------------------------------------------------------------------
+Offset* Size    Type        Field           Description
+------  ----    ----        -----           -----------
++0      8       Double      Latitude        Origin latitude (degrees)
++8      8       Double      Longitude       Origin longitude (degrees)
++16     4       Float       Altitude        Origin altitude (meters)
++20     4       Float       Rotation        Origin rotation (degrees)
+
+--------------------------------------------------------------------------------
+4.12 OUTPUT_USED_IDs (Flag 0x1000)
+--------------------------------------------------------------------------------
+Offset* Size    Type        Field           Description
+------  ----    ----        -----           -----------
++0      12      Byte[12]    IDsUsed         Array of beacon IDs used
+
+--------------------------------------------------------------------------------
+4.13 OUTPUT_FIZ_STATUS (Flag 0x2000)
+--------------------------------------------------------------------------------
+Offset* Size    Type        Field           Description
+------  ----    ----        -----           -----------
++0      4       Byte[4]     FIZStatus       FIZ encoder status bytes
+
+--------------------------------------------------------------------------------
+4.14 OUTPUT_QUATERNIONS (Flag 0x4000)
+--------------------------------------------------------------------------------
+Offset* Size    Type        Field           Description
+------  ----    ----        -----           -----------
++0      4       Float       Qx              Quaternion X (scalar)
++4      4       Float       Qi              Quaternion I
++8      4       Float       Qj              Quaternion J
++12     4       Float       Qk              Quaternion K
+
+--------------------------------------------------------------------------------
+4.15 OUTPUT_FIZ_EXTENDED (Flag 0x8000)
+--------------------------------------------------------------------------------
+Extended FIZ data with calibration status flags.
+
+Offset* Size    Type        Field           Description
+------  ----    ----        -----           -----------
++0      4       UInt32      EncodedFocus    Focus with calibration flag
++4      4       UInt32      EncodedIris     Iris with calibration flag
++8      4       UInt32      EncodedZoom     Zoom with calibration flag
+
+Encoding for each field:
+- Bit 31 (0x80000000): Calibration flag (1 = calibrated, 0 = raw)
+- If calibrated: value = (encoded & 0x7FFFFFFF) / 100.0
+- If raw: value = (encoded & 0x7FFFFFFF)
+
+For Zoom, additional telephoto multiplier is encoded:
+- Bits 30-24: Telephoto multiplier (7 bits)
+- Bits 23-0: Zoom value
+
+================================================================================
+5. CRC CHECKSUM
+================================================================================
+
+The last 2 bytes of the message contain a CRC-16 checksum.
+
+CRC Parameters:
+- Polynomial: 0x1021 (4129 decimal)
+- Initial value: 0x0000
+- Input reflected: No
+- Output reflected: No
+- Final XOR: 0x0000
+
+CRC is calculated over all bytes EXCEPT the last 2 (the CRC bytes themselves).
+
+CRC bytes are stored as:
+- Byte[ByteCount-2] = (CRC >> 8) & 0xFF  (high byte)
+- Byte[ByteCount-1] = CRC & 0xFF         (low byte)
+
+Pseudocode:
+    uint16 CRC = 0
+    for each byte in message[0 .. ByteCount-3]:
+        CRC = CRC XOR (byte << 8)
+        for i = 0 to 7:
+            if (CRC & 0x8000):
+                CRC = (CRC << 1) XOR 0x1021
+            else:
+                CRC = CRC << 1
+            CRC = CRC & 0xFFFF
+
+================================================================================
+6. EXAMPLE MESSAGE DECODE
+================================================================================
+
+Raw bytes (hex):
+24 D9 42 00 46 24 00 00 50 D4 1D 04 00 00 00 00
+F8 32 5D 40 00 00 00 80 26 4C 4A 40 62 10 7A 41
+16 04 3D C0 00 AA E1 3F 00 98 0E 3F 00 59 B3 43
+00 00 00 FE 00 00 00 00 00 00 00 00 00 03 02 00
+D8 FC
+
+Decoded:
+    Header:         0x24 0xD9 (Universal format)
+    ByteCount:      66 bytes
+    OutputFlags:    0x00002446
+                    - OUTPUT_STATUS (0x0002)
+                    - OUTPUT_ORIENTATION (0x0004)
+                    - OUTPUT_ACCURACY (0x0040)
+                    - OUTPUT_FIZ_DATA (0x0400)
+                    - OUTPUT_FIZ_STATUS (0x2000)
+
+    TimeMS:         69,072,976 ms = 19:11:12.976 UTC
+    X:              116.82 meters
+    Y:              52.60 meters
+    Z:              15.63 meters
+
+    Status:
+        Satellites:     22
+        SolutionType:   4 (RTK Fixed)
+        KFStatus:       0xC03D
+
+    Orientation:
+        Roll:           1.76 degrees
+        Pitch:          0.56 degrees
+        Yaw:            358.66 degrees
+
+    Accuracy:
+        PosResidual:    0.0
+        UseFlags:       0x00 (no alerts)
+        VelResidual:    0.0
+        RoverID:        254
+
+    FIZ Data:
+        Focus:          0 (no data)
+        Iris:           0.0
+        Zoom:           0.0
+
+    FIZ Status:     00 03 02 00
+
+    CRC:            0xD8FC (valid)
+
+================================================================================
+7. DATA TYPE REFERENCE
+================================================================================
+
+Type        Size    Description
+----        ----    -----------
+Byte        1       Unsigned 8-bit integer (0-255)
+Int16       2       Signed 16-bit integer, little-endian
+UInt16      2       Unsigned 16-bit integer, little-endian
+Int24       3       Signed 24-bit integer, little-endian (sign extend bit 23)
+Int32       4       Signed 32-bit integer, little-endian
+UInt32      4       Unsigned 32-bit integer, little-endian
+Float       4       IEEE 754 single-precision, little-endian
+Double      8       IEEE 754 double-precision, little-endian
+
+================================================================================
+Document Version: 1.0
+Based on: Position Demo source code (positionOutputData.cs)
+================================================================================

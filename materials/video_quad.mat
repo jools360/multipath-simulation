@@ -1,0 +1,22 @@
+material {
+    name : VideoQuad,
+    shadingModel : unlit,
+    doubleSided : true,
+    parameters : [
+        {
+            type : sampler2d,
+            name : videoTexture
+        }
+    ],
+    requires : [
+        uv0
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        vec4 color = texture(materialParams_videoTexture, getUV0());
+        material.baseColor = vec4(color.b, color.g, color.r, color.a);
+    }
+}

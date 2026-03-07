@@ -1,0 +1,22 @@
+material {
+    name : imgui,
+    shadingModel : unlit,
+    blending : transparent,
+    depthWrite : false,
+    depthCulling : false,
+    doubleSided : true,
+    requires : [ uv0, color ],
+    parameters : [
+        { type : sampler2d, name : albedo }
+    ]
+}
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        vec4 tex = texture(materialParams_albedo, getUV0());
+        vec4 col = getColor();
+        float a = tex.a * col.a;
+        // Pre-multiply alpha for transparent blending
+        material.baseColor = vec4(col.rgb * a, a);
+    }
+}

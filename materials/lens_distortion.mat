@@ -1,0 +1,59 @@
+material {
+    name : LensDistortion,
+    shadingModel : unlit,
+    blending : transparent,
+    doubleSided : true,
+    depthWrite : false,
+    depthCulling : false,
+    parameters : [
+        {
+            type : sampler2d,
+            name : sceneTexture
+        },
+        {
+            type : sampler2d,
+            name : uvMap
+        },
+        {
+            type : float,
+            name : showGrid
+        }
+    ],
+    requires : [
+        uv0
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec2 uv = getUV0();
+
+        // Look up remapped UV from the precomputed UV map texture
+        vec4 mapped = texture(materialParams_uvMap, uv);
+        vec2 sourceUV = mapped.rg;
+
+        // Out-of-bounds check: B channel encodes validity (1.0 = valid, 0.0 = OOB)
+        if (mapped.b < 0.5) {
+            material.baseColor = vec4(0.0, 0.0, 0.0, 0.0);
+        } else {
+            vec4 color = texture(materialParams_sceneTexture, sourceUV);
+
+            // Grid overlay: draw lines at regular intervals in source (undistorted) space.
+            // Straight grid in source space appears curved in output, showing distortion.
+            if (materialParams.showGrid > 0.5) {
+                float gridSpacing = 0.05; // 20 lines across each axis
+                float lineWidth = 0.002;
+                float gx = mod(sourceUV.x, gridSpacing);
+                float gy = mod(sourceUV.y, gridSpacing);
+                if (gx < lineWidth || gx > gridSpacing - lineWidth ||
+                    gy < lineWidth || gy > gridSpacing - lineWidth) {
+                    color = vec4(0.0, 1.0, 0.0, 1.0); // green grid lines
+                }
+            }
+
+            material.baseColor = color;
+        }
+    }
+}

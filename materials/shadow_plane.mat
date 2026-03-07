@@ -1,0 +1,17 @@
+material {
+    name            : ShadowPlane,
+    shadingModel    : unlit,
+    blending        : transparent,
+    shadowMultiplier: true,
+
+    parameters : [
+        { type : float, name : shadowStrength }
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = vec4(0.0, 0.0, 0.0, materialParams.shadowStrength);
+    }
+}

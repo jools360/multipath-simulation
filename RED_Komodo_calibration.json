@@ -1,0 +1,41 @@
+{
+  "camera": "RED Komodo",
+  "source": "RED_Komodo.uasset (Unreal Engine Camera Calibration)",
+  "model": "opencv",
+  "focal_length_mm": 50.0,
+  "sensor_dimensions_mm": {
+    "width": 25.44,
+    "height": 14.26
+  },
+  "image_dimensions_px": {
+    "width": 1920,
+    "height": 1080
+  },
+  "camera_matrix": {
+    "fx": 1207.547,
+    "fy": 1211.764,
+    "cx": 1008.130,
+    "cy": 628.377
+  },
+  "camera_matrix_normalized": {
+    "fx": 0.628931,
+    "fy": 1.122020,
+    "cx": 0.525068,
+    "cy": 0.581831,
+    "_note": "UE normalized values from the .uasset (Fx/Cx normalized to image width, Fy/Cy normalized to image height)"
+  },
+  "distortion_coefficients": {
+    "k1": -0.060304,
+    "k2": -0.278899,
+    "p1": 0.005375,
+    "p2": -0.000956,
+    "k3": 0.807218
+  },
+  "distortion_coefficients_array": [-0.060304, -0.278899, 0.005375, -0.000956, 0.807218],
+  "opencv_camera_matrix": [
+    [1207.547, 0.0, 1008.130],
+    [0.0, 1211.764, 628.377],
+    [0.0, 0.0, 1.0]
+  ],
+  "opencv_dist_coeffs": [[-0.060304, -0.278899, 0.005375, -0.000956, 0.807218]]
+}

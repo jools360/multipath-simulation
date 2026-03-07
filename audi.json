@@ -1,0 +1,130 @@
+{
+  "background": {
+    "useGradient": true
+  },
+  "camera": {
+    "autoOrbit": false,
+    "distance": 10.5,
+    "pitch": 0.2750000059604645,
+    "target": [
+      0.0,
+      0.5,
+      0.0
+    ],
+    "yaw": 38.81424331665039
+  },
+  "cone": {
+    "position": [
+      0.0,
+      1.0,
+      0.0
+    ],
+    "rot90": [
+      2,
+      0,
+      0
+    ],
+    "scale": 1.0,
+    "visible": false
+  },
+  "cube": {
+    "visible": false
+  },
+  "environment": {
+    "groundBrightness": 1.0,
+    "hdrFile": "C:\\Users\\julia\\Downloads\\derelict_airfield_01_4k.hdr",
+    "horizonBrightness": 1.0,
+    "lightIntensity": 1.0,
+    "skyBlueness": 1.0,
+    "skyBrightness": 1.0
+  },
+  "glbObjects": [
+    {
+      "aabbCenterOffset": [
+        0.05640000104904175,
+        0.0,
+        -0.018400000408291817
+      ],
+      "filename": "AirPixel_logo.glb",
+      "name": "Logo",
+      "position": [
+        0.0,
+        1.5,
+        -1.8600000143051147
+      ],
+      "rot90": [
+        1,
+        -1,
+        0
+      ],
+      "scale": 16.5,
+      "visible": false,
+      "yRotation": 0.0
+    },
+    {
+      "aabbCenterOffset": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "filename": "RACELOGIC.glb",
+      "name": "Racelogic",
+      "position": [
+        2.0,
+        0.0,
+        0.0
+      ],
+      "rot90": [
+        0,
+        0,
+        0
+      ],
+      "scale": 1.0,
+      "visible": false,
+      "yRotation": 0.0
+    },
+    {
+      "aabbCenterOffset": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "filename": "C:\\Users\\julia\\Desktop\\Audi_RS6_(Mk4)_(C8)_avant_2019_2.glb",
+      "name": "Audi_RS6_(Mk4)_(C8)_avant_2019_2",
+      "position": [
+        0.0,
+        0.8999999761581421,
+        0.0
+      ],
+      "rot90": [
+        0,
+        0,
+        0
+      ],
+      "scale": 1.0,
+      "visible": true,
+      "yRotation": 0.0
+    }
+  ],
+  "groundPlane": {
+    "visible": true,
+    "worldY": 1.0
+  },
+  "lighting": {
+    "exposure": 15.0,
+    "iblIntensity": 16400.0,
+    "shadowStrength": 0.5,
+    "sunIntensity": 300000.0,
+    "sunPitch": -0.5,
+    "sunYaw": -0.800000011920929
+  },
+  "tracking": {
+    "protocol": 0,
+    "transport": 0,
+    "udpPort": 6301
+  },
+  "trailMarkers": {
+    "visible": true
+  },
+  "version": 1
+}
