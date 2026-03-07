@@ -1,0 +1,112 @@
+VBO file description
+A .vbo file is a space delimited text file from a VBOX GPS logger.
+The sample period will be an exact value of 100Hz, 50Hz, 25Hz 10Hz or 5Hz.
+The time column is in hhmmss.sss
+Ignore the lines at the start of the file if there are zero satellites
+The start of the file has a few lines about when it was created
+The latitude and longitude are stored in minutes
+This is important, the sign of the longitude in the vbo file is inverted, so it needs to be multiplied by -1 in any calculations
+
+Solution type describes if the GPS engine has RTK lock:
+4 = RTK fixed
+3 = RTK float
+2 = DGP only
+1 = Stand alone
+0 = no solution
+
+Then there are a number of different sections which are defined by square brackets:
+
+[header]
+Each line is then the name of the channel in order of the columns of data
+Use this to work out the order of the the data lines
+Do not hard code the locations of the data
+Make all the text lowercase in the column names to make comparison less strict
+
+[channel units]
+
+[comments]
+
+[AVI]
+
+Etc.
+
+Then 
+[data]
+Followed by columns of logged data at the sample rate which can be deduced from the change in UTC time.
+
+Here is a short example of a .vbo file
+The positions of the data in the lines is not fixed, this is just an example
+Always use the header information to work out how to decode each channel
+Use doubles for any of the channels which are not integers
+
+File created on 01/01/2000 @ 00:00:37
+
+[header]
+satellites
+time
+latitude
+longitude
+velocity kmh
+heading
+height
+vertical velocity m/s
+sampleperiod
+solution type
+avifileindex
+avisynctime
+Trig_An
+AVAD_Audio
+AVAD_Optical
+ADDWChimeA
+AddwDstrct
+Audio_Sens
+
+[channel units]
+s
+(null)
+(null)
+(null)
+(null)
+(null)
+(null)
+
+[comments]
+(c) Racelogic
+<Unit Info>
+Type   : VBVDHD2-V10 2cam HDMI 25Hz
+Serial : 011598
+Firmware : 01.06.00.11 10/12/2024 11:52:30
+Tracks Database : 2.115.288
+CAM0:RLACS329,0,hw:0,fw:3.0.0
+CAM1:RLACS329,0,hw:0,fw:3.0.0
+<GNSS>
+Engine   : uBlox fw:4.040 hw:190000.000 protocol:32.010 rom_base:294330464.000
+Source : External
+<SYNC>
+sys ts 39422 at tod 00:00:22.620
+
+[AVI]
+Unit1_0002_
+mp4
+
+[column names]
+sats time lat long velocity heading height vert-vel Tsample solution_type avifileindex avitime Trig_An AVAD_Audio AVAD_Optical ADDWChimeA AddwDstrct Audio_Sens 
+
+[data]
+008 155238.950 +3154.33989240 +0087.29599840 000.519 208.360 +00144.21 +0000.09 0.010 01 0001 000033833 -6.275726E-04 +0.000000E+00 +0.000000E+00 +0.000000E+00 +1.000000E+00 +4.929979E+00
+008 155238.960 +3154.33989650 +0087.29599600 000.296 208.360 +00144.22 -0000.16 0.010 01 0001 000033833 -6.275726E-04 +0.000000E+00 +0.000000E+00 +0.000000E+00 +1.000000E+00 +4.929378E+00
+008 155238.970 +3154.33989550 +0087.29599720 000.222 208.360 +00144.22 -0000.16 0.010 01 0001 000033866 -8.674064E-04 +0.000000E+00 +0.000000E+00 +0.000000E+00 +1.000000E+00 +4.929600E+00
+008 155238.980 +3154.33989610 +0087.29599730 000.204 208.360 +00144.23 -0000.16 0.010 01 0001 000033866 -7.679630E-04 +0.000000E+00 +0.000000E+00 +0.000000E+00 +1.000000E+00 +4.927847E+00
+008 155238.990 +3154.33989460 +0087.29599790 000.148 208.360 +00144.22 -0000.12 0.010 01 0001 000033866 -7.679630E-04 +0.000000E+00 +0.000000E+00 +0.000000E+00 +1.000000E+00 +4.929261E+00
+008 155239.000 +3154.33989480 +0087.29599760 000.537 003.690 +00144.23 -0000.25 0.010 01 0001 000033899 -7.211664E-04 +0.000000E+00 +0.000000E+00 +0.000000E+00 +1.000000E+00 +4.929968E+00
+
+In this sample file: 
+satellites are the first column 
+solution type is in column 9 
+etc.
+Note that by default velocity is in kmh, so any conversions used for latacc and longacc will need to convert this to m/s
+End of VBO file description
+
+If there is a video file associated with the .vbo file, it will be listed under [AVI]. 
+The name of the video file is the same as the .vbo file, but with an index number which is the avifileindex channel. 
+Each GPS sample is time-stamped with the position of the associated video file in ms, so in the example above 000033833 is 33.833 s into the video file.

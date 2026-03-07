@@ -11,7 +11,9 @@ deps/
 *.blend
 *.blend1
 *.csv
+*.filamat
 assets/
+VBOX data/
 
 # Temporary files
 *.tmp.*

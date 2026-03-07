@@ -1,0 +1,19 @@
+material {
+    name : GhostCar,
+    shadingModel : lit,
+    blending : fade,
+    depthWrite : false,
+    doubleSided : true,
+    parameters : [
+        { type : float4, name : baseColor }
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = materialParams.baseColor;
+        material.roughness = 0.4;
+        material.metallic = 0.3;
+    }
+}

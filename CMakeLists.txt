@@ -180,3 +180,118 @@ add_custom_command(TARGET FilamentCone POST_BUILD
     "C:/Users/julia/Dropbox/AirPixel-White-01.png"
     "$<TARGET_FILE_DIR:FilamentCone>/AirPixel-White-01.png"
 )
+
+# ============================================================
+# GhostCar executable
+# ============================================================
+add_executable(GhostCar
+    src/ghostcar_main.cpp
+    src/GhostCarApp.cpp
+    src/VboParser.cpp
+    ${IMGUI_DIR}/imgui.cpp
+    ${IMGUI_DIR}/imgui_draw.cpp
+    ${IMGUI_DIR}/imgui_tables.cpp
+    ${IMGUI_DIR}/imgui_widgets.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_sdl2.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
+)
+
+target_include_directories(GhostCar PRIVATE
+    ${FILAMENT_DIR}/include
+    ${SDL2_DIR}/include
+    ${OPENCV_DIR}/include
+    ${IMGUI_DIR}
+    ${IMGUI_DIR}/backends
+    ${CMAKE_SOURCE_DIR}/deps
+    src
+)
+
+target_link_directories(GhostCar PRIVATE
+    ${FILAMENT_DIR}/lib/x86_64/mt
+    ${SDL2_DIR}/lib/x64
+    ${OPENCV_DIR}/x64/vc16/lib
+)
+
+target_link_libraries(GhostCar PRIVATE
+    filament
+    gltfio
+    gltfio_core
+    uberarchive
+    filameshio
+    backend
+    bluegl
+    bluevk
+    shaders
+    filabridge
+    filaflat
+    utils
+    geometry
+    smol-v
+    ibl
+    image
+    ktxreader
+    stb
+    uberzlib
+    dracodec
+    meshoptimizer
+    zstd
+)
+
+target_link_libraries(GhostCar PRIVATE
+    SDL2
+    SDL2main
+)
+
+target_link_libraries(GhostCar PRIVATE
+    opencv_world4120
+)
+
+target_link_libraries(GhostCar PRIVATE
+    opengl32
+    gdi32
+    user32
+    shlwapi
+    dwmapi
+    ws2_32
+    comdlg32
+)
+
+# Copy materials to GhostCar output directory
+add_custom_command(TARGET GhostCar POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${CMAKE_SOURCE_DIR}/materials/ghost_car.filamat"
+    "$<TARGET_FILE_DIR:GhostCar>/ghost_car.filamat"
+)
+add_custom_command(TARGET GhostCar POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${CMAKE_SOURCE_DIR}/materials/background.filamat"
+    "$<TARGET_FILE_DIR:GhostCar>/background.filamat"
+)
+
+# Copy funcup.glb to output directory
+add_custom_command(TARGET GhostCar POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${CMAKE_SOURCE_DIR}/assets/funcup.glb"
+    "$<TARGET_FILE_DIR:GhostCar>/funcup.glb"
+)
+
+# Copy SDL2.dll to output directory
+add_custom_command(TARGET GhostCar POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${SDL2_DIR}/lib/x64/SDL2.dll"
+    "$<TARGET_FILE_DIR:GhostCar>/SDL2.dll"
+)
+
+# Copy OpenCV DLL to output directory
+add_custom_command(TARGET GhostCar POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${OPENCV_DIR}/x64/vc16/bin/opencv_world4120.dll"
+    "$<TARGET_FILE_DIR:GhostCar>/opencv_world4120.dll"
+)
+
+# Copy StartFinishDataBase.xml to output directory
+add_custom_command(TARGET GhostCar POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${CMAKE_SOURCE_DIR}/StartFinishDataBase.xml"
+    "$<TARGET_FILE_DIR:GhostCar>/StartFinishDataBase.xml"
+)
