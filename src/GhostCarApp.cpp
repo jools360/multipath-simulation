@@ -1257,6 +1257,59 @@ void GhostCarApp::run() {
             }
         }
 
+        // --- Update overlays when paused (so settings changes are visible) ---
+        if (mPlaying && mPaused && mVideoOpen && mCameraLapIdx >= 0 && mGhostLapIdx >= 0) {
+            const auto& camLap = mLaps[mCameraLapIdx];
+            double dataElapsed = mPlayElapsedSec + mDataOffsetMs / 1000.0;
+            dataElapsed = std::clamp(dataElapsed, 0.0, camLap.lapTimeSeconds);
+            int camIdx = findSampleAtElapsed(mVbo, camLap.startIdx, camLap.endIdx, dataElapsed);
+
+            const auto& ghostLap = mLaps[mGhostLapIdx];
+            double ghostElapsed = std::min(dataElapsed, ghostLap.lapTimeSeconds);
+            int ghostIdx = findSampleAtElapsed(mVbo, ghostLap.startIdx, ghostLap.endIdx, ghostElapsed);
+
+            const auto& camSample = mVbo.samples[camIdx];
+            const auto& ghostSample = mVbo.samples[ghostIdx];
+
+            double ghostEast, ghostNorth;
+            gpsToLocalMeters(ghostSample.latitude, ghostSample.longitude,
+                             camSample.latitude, camSample.longitude, ghostEast, ghostNorth);
+
+            double headRad = camSample.heading * M_PI / 180.0;
+            double cosH = cos(headRad);
+            double sinH = sin(headRad);
+            double relRight = ghostEast * cosH - ghostNorth * sinH;
+            double relForward = ghostEast * sinH + ghostNorth * cosH;
+
+            float fx = (float)relRight;
+            float fy = -mCameraHeight + mGhostYOffset;
+            float fz = -(float)relForward;
+
+            double headingDiff = ghostSample.heading - camSample.heading;
+            while (headingDiff > 180.0) headingDiff -= 360.0;
+            while (headingDiff < -180.0) headingDiff += 360.0;
+            float ghostYRot = -(float)(headingDiff * M_PI / 180.0);
+            float ghostPitch = mPitchCompensation ? computePitch(mVbo, ghostIdx) : 0.0f;
+
+            if (mGhostVisible && relForward > 0) {
+                showGhostCar();
+                updateGhostCarTransform(fx, fy, fz, ghostYRot, ghostPitch);
+            } else {
+                hideGhostCar();
+            }
+
+            float camPitch = mPitchCompensation ? computePitch(mVbo, camIdx) : 0.0f;
+            camPitch += mCameraPitchOffset * (float)M_PI / 180.0f;
+            float camPan = mCameraPanOffset * (float)M_PI / 180.0f;
+            float lookX = 100.0f * sinf(camPan) * cosf(camPitch);
+            float lookY = mCameraHeight + 100.0f * sinf(camPitch);
+            float lookZ = -100.0f * cosf(camPan) * cosf(camPitch);
+            mCamera->lookAt({0, mCameraHeight, 0}, {lookX, lookY, lookZ}, {0, 1, 0});
+
+            if (mShowDrivingLine && mLineVB)
+                updateDrivingLine(camIdx);
+        }
+
         // --- Render ---
         if (mRenderer->beginFrame(mSwapChain)) {
             if (mBackgroundView) mRenderer->render(mBackgroundView);
