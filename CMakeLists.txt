@@ -267,6 +267,11 @@ add_custom_command(TARGET GhostCar POST_BUILD
     "${CMAKE_SOURCE_DIR}/materials/background.filamat"
     "$<TARGET_FILE_DIR:GhostCar>/background.filamat"
 )
+add_custom_command(TARGET GhostCar POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${CMAKE_SOURCE_DIR}/materials/line.filamat"
+    "$<TARGET_FILE_DIR:GhostCar>/line.filamat"
+)
 
 # Copy funcup.glb to output directory
 add_custom_command(TARGET GhostCar POST_BUILD

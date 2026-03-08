@@ -75,9 +75,12 @@ GhostCarApp::~GhostCarApp() {
         if (mBackgroundIB) mEngine->destroy(mBackgroundIB);
         if (mVideoTexture) mEngine->destroy(mVideoTexture);
 
+        destroyDrivingLine();
+
         for (auto* mi : mGhostMIs) mEngine->destroy(mi);
         mGhostMIs.clear();
         if (mGhostMaterial) mEngine->destroy(mGhostMaterial);
+        if (mLineMaterial) mEngine->destroy(mLineMaterial);
         if (mGhostAsset) {
             mScene->removeEntities(mGhostAsset->getEntities(), mGhostAsset->getEntityCount());
             mAssetLoader->destroyAsset(mGhostAsset);
@@ -212,8 +215,9 @@ bool GhostCarApp::init() {
 
     createBackgroundQuad();
 
-    // Load ghost car material
+    // Load materials
     mGhostMaterial = loadMaterial("ghost_car.filamat");
+    mLineMaterial = loadMaterial("line.filamat");
 
     // Load ghost car model
     loadGhostCar();
@@ -301,6 +305,8 @@ bool GhostCarApp::init() {
         loadCircuitDatabase(dbPath, mCircuitDb);
         strncpy(mDbPath, dbPath.c_str(), sizeof(mDbPath) - 1);
     }
+
+    loadSettings();
 
     return true;
 }
@@ -480,8 +486,8 @@ void GhostCarApp::applyGhostTransparency() {
         size_t primCount = rm.getPrimitiveCount(ri);
         for (size_t p = 0; p < primCount; p++) {
             auto* mi = mGhostMaterial->createInstance();
-            mi->setParameter("baseColor",
-                float4{mGhostTint[0], mGhostTint[1], mGhostTint[2], mGhostAlpha});
+            mi->setParameter("color", float3{0.85f, 0.85f, 0.85f});
+            mi->setParameter("alpha", mGhostAlpha);
             rm.setMaterialInstanceAt(ri, p, mi);
             mGhostMIs.push_back(mi);
         }
@@ -489,6 +495,73 @@ void GhostCarApp::applyGhostTransparency() {
         rm.setCastShadows(ri, false);
         rm.setReceiveShadows(ri, false);
     }
+}
+
+static std::string getSettingsPath() {
+#ifdef _WIN32
+    char ep[MAX_PATH];
+    GetModuleFileNameA(NULL, ep, MAX_PATH);
+    std::string d(ep);
+    size_t s = d.find_last_of("\\/");
+    if (s != std::string::npos) return d.substr(0, s + 1) + "ghostcar_settings.ini";
+#endif
+    return "ghostcar_settings.ini";
+}
+
+void GhostCarApp::saveSettings() {
+    std::ofstream f(getSettingsPath());
+    if (!f) return;
+    f << "vboPath=" << mVboPath << "\n";
+    f << "ghostAlpha=" << mGhostAlpha << "\n";
+    f << "cameraFovH=" << mCameraFovH << "\n";
+    f << "cameraHeight=" << mCameraHeight << "\n";
+    f << "cameraPitchOffset=" << mCameraPitchOffset << "\n";
+    f << "cameraPanOffset=" << mCameraPanOffset << "\n";
+    f << "dataOffsetMs=" << mDataOffsetMs << "\n";
+    f << "ghostYOffset=" << mGhostYOffset << "\n";
+    f << "modelRotOffset=" << mModelRotOffset << "\n";
+    f << "ghostScale=" << mGhostScale << "\n";
+    f << "pitchCompensation=" << (mPitchCompensation ? 1 : 0) << "\n";
+    f << "showDrivingLine=" << (mShowDrivingLine ? 1 : 0) << "\n";
+    f << "lineWidth=" << mLineWidth << "\n";
+    f << "playbackSpeed=" << mPlaybackSpeed << "\n";
+    std::cout << "Settings saved to " << getSettingsPath() << std::endl;
+}
+
+void GhostCarApp::loadSettings() {
+    std::ifstream f(getSettingsPath());
+    if (!f) return;
+    std::string line;
+    while (std::getline(f, line)) {
+        size_t eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        std::string key = line.substr(0, eq);
+        std::string val = line.substr(eq + 1);
+        if (key == "vboPath") strncpy(mVboPath, val.c_str(), sizeof(mVboPath) - 1);
+        else if (key == "ghostAlpha") mGhostAlpha = std::stof(val);
+        else if (key == "cameraFovH") mCameraFovH = std::stof(val);
+        else if (key == "cameraHeight") mCameraHeight = std::stof(val);
+        else if (key == "cameraPitchOffset") mCameraPitchOffset = std::stof(val);
+        else if (key == "cameraPanOffset") mCameraPanOffset = std::stof(val);
+        else if (key == "dataOffsetMs") mDataOffsetMs = std::stof(val);
+        else if (key == "ghostYOffset") mGhostYOffset = std::stof(val);
+        else if (key == "modelRotOffset") mModelRotOffset = std::stof(val);
+        else if (key == "ghostScale") mGhostScale = std::stof(val);
+        else if (key == "pitchCompensation") mPitchCompensation = (val == "1");
+        else if (key == "showDrivingLine") mShowDrivingLine = (val == "1");
+        else if (key == "lineWidth") mLineWidth = std::stof(val);
+        else if (key == "playbackSpeed") mPlaybackSpeed = std::stof(val);
+    }
+    // Apply loaded FOV
+    if (mCamera) {
+        float aspect = (float)mWinWidth / (float)mWinHeight;
+        mCamera->setProjection(mCameraFovH, aspect, 0.1f, 2000.0f, Camera::Fov::HORIZONTAL);
+    }
+    // Apply loaded alpha to ghost material instances
+    for (auto* mi : mGhostMIs) {
+        mi->setParameter("alpha", mGhostAlpha);
+    }
+    std::cout << "Settings loaded from " << getSettingsPath() << std::endl;
 }
 
 float GhostCarApp::computePitch(const VboFile& vbo, int sampleIdx, int windowSamples) {
@@ -515,6 +588,130 @@ float GhostCarApp::computePitch(const VboFile& vbo, int sampleIdx, int windowSam
     if (horizDist < 0.1) return 0.0f;  // too close, skip
 
     return (float)atan2(heightDiff, horizDist);
+}
+
+void GhostCarApp::createDrivingLine(const LapInfo& lap) {
+    destroyDrivingLine();
+
+    mLineSampleCount = lap.endIdx - lap.startIdx + 1;
+    if (mLineSampleCount < 2) return;
+    mLineVertexCount = mLineSampleCount * 2;  // left + right vertex per sample
+
+    // Vertex buffer: positions updated each frame, tangents set once
+    mLineVB = VertexBuffer::Builder()
+        .vertexCount(mLineVertexCount).bufferCount(2)
+        .attribute(VertexAttribute::POSITION, 0, VertexBuffer::AttributeType::FLOAT3, 0, sizeof(float3))
+        .attribute(VertexAttribute::TANGENTS, 1, VertexBuffer::AttributeType::SHORT4, 0, 4 * sizeof(int16_t))
+        .normalized(VertexAttribute::TANGENTS)
+        .build(*mEngine);
+
+    // Set dummy tangents once (pointing up)
+    int16_t* tangents = new int16_t[mLineVertexCount * 4];
+    for (int i = 0; i < mLineVertexCount; i++) {
+        tangents[i * 4 + 0] = 0;
+        tangents[i * 4 + 1] = 0;
+        tangents[i * 4 + 2] = 0;
+        tangents[i * 4 + 3] = 32767;
+    }
+    mLineVB->setBufferAt(*mEngine, 1, VertexBuffer::BufferDescriptor(
+        tangents, mLineVertexCount * 4 * sizeof(int16_t),
+        [](void* buf, size_t, void*) { delete[] static_cast<int16_t*>(buf); }
+    ));
+
+    // Index buffer: sequential for triangle strip
+    uint16_t* indices = new uint16_t[mLineVertexCount];
+    for (int i = 0; i < mLineVertexCount; i++) indices[i] = (uint16_t)i;
+    mLineIB = IndexBuffer::Builder()
+        .indexCount(mLineVertexCount)
+        .bufferType(IndexBuffer::IndexType::USHORT)
+        .build(*mEngine);
+    mLineIB->setBuffer(*mEngine, IndexBuffer::BufferDescriptor(
+        indices, mLineVertexCount * sizeof(uint16_t),
+        [](void* buf, size_t, void*) { delete[] static_cast<uint16_t*>(buf); }
+    ));
+
+    // Material instance - use line material (no depth write, so always visible)
+    if (mLineMaterial) {
+        mLineMI = mLineMaterial->createInstance();
+        mLineMI->setParameter("color", float3{1.0f, 1.0f, 0.0f});
+        mLineMI->setParameter("alpha", 0.8f);
+    }
+
+    EntityManager& em = EntityManager::get();
+    mLineEntity = em.create();
+    RenderableManager::Builder(1)
+        .boundingBox({{-10000, -100, -10000}, {10000, 100, 10000}})
+        .geometry(0, RenderableManager::PrimitiveType::TRIANGLE_STRIP, mLineVB, mLineIB, 0, mLineVertexCount)
+        .material(0, mLineMI)
+        .culling(false)
+        .castShadows(false)
+        .receiveShadows(false)
+        .build(*mEngine, mLineEntity);
+
+    mScene->addEntity(mLineEntity);
+}
+
+void GhostCarApp::updateDrivingLine(int camIdx) {
+    if (!mLineVB || mLineSampleCount < 2) return;
+
+    const auto& camSample = mVbo.samples[camIdx];
+    double headRad = camSample.heading * M_PI / 180.0;
+    double cosH = cos(headRad);
+    double sinH = sin(headRad);
+
+    const auto& camLap = mLaps[mCameraLapIdx];
+    float halfW = mLineWidth * 0.5f;
+    float y = -mCameraHeight + mGhostYOffset;
+
+    // First pass: compute centre positions in camera-local space with height
+    double camHeight = camSample.height;
+    std::vector<float3> centres(mLineSampleCount);
+    for (int i = 0; i < mLineSampleCount; i++) {
+        const auto& s = mVbo.samples[camLap.startIdx + i];
+        double east, north;
+        gpsToLocalMeters(s.latitude, s.longitude,
+                         camSample.latitude, camSample.longitude, east, north);
+        double relRight = east * cosH - north * sinH;
+        double relForward = east * sinH + north * cosH;
+        float heightDiff = (float)(s.height - camHeight);
+        centres[i] = float3{(float)relRight, y + heightDiff, -(float)relForward};
+    }
+
+    // Second pass: generate ribbon (left/right offset perpendicular to direction)
+    float3* verts = new float3[mLineVertexCount];
+    for (int i = 0; i < mLineSampleCount; i++) {
+        // Direction vector from previous to next sample
+        int iPrev = std::max(0, i - 1);
+        int iNext = std::min(mLineSampleCount - 1, i + 1);
+        float dx = centres[iNext].x - centres[iPrev].x;
+        float dz = centres[iNext].z - centres[iPrev].z;
+        float len = sqrtf(dx * dx + dz * dz);
+        if (len < 1e-6f) { dx = 0; dz = -1; len = 1; }
+        // Perpendicular in XZ plane (rotate 90 degrees)
+        float px = -dz / len * halfW;
+        float pz =  dx / len * halfW;
+
+        verts[i * 2 + 0] = float3{centres[i].x + px, centres[i].y, centres[i].z + pz};
+        verts[i * 2 + 1] = float3{centres[i].x - px, centres[i].y, centres[i].z - pz};
+    }
+
+    mLineVB->setBufferAt(*mEngine, 0, VertexBuffer::BufferDescriptor(
+        verts, mLineVertexCount * sizeof(float3),
+        [](void* buf, size_t, void*) { delete[] static_cast<float3*>(buf); }
+    ));
+}
+
+void GhostCarApp::destroyDrivingLine() {
+    if (mLineEntity.isNull() == false) {
+        mScene->remove(mLineEntity);
+        mEngine->getRenderableManager().destroy(mLineEntity);
+        EntityManager::get().destroy(mLineEntity);
+        mLineEntity = {};
+    }
+    if (mLineMI) { mEngine->destroy(mLineMI); mLineMI = nullptr; }
+    if (mLineVB) { mEngine->destroy(mLineVB); mLineVB = nullptr; }
+    if (mLineIB) { mEngine->destroy(mLineIB); mLineIB = nullptr; }
+    mLineVertexCount = 0;
 }
 
 void GhostCarApp::updateGhostCarTransform(float x, float y, float z, float yRotRad, float pitchRad) {
@@ -628,8 +825,15 @@ int GhostCarApp::findSampleAtElapsed(const VboFile& vbo, int startIdx, int endId
 void GhostCarApp::updateSidebarLayout() {
     int mainX, mainY;
     SDL_GetWindowPosition(mWindow, &mainX, &mainY);
-    SDL_SetWindowPosition(mControlWindow, mainX - mSidebarWidth, mainY);
-    SDL_SetWindowSize(mControlWindow, mSidebarWidth, mWinHeight);
+    // Use full display height for the sidebar so all controls are visible
+    int di = SDL_GetWindowDisplayIndex(mWindow);
+    SDL_Rect bounds;
+    int sidebarHeight = mWinHeight;
+    if (SDL_GetDisplayUsableBounds(di, &bounds) == 0) {
+        sidebarHeight = bounds.h;
+    }
+    SDL_SetWindowPosition(mControlWindow, mainX - mSidebarWidth, bounds.y);
+    SDL_SetWindowSize(mControlWindow, mSidebarWidth, sidebarHeight);
 }
 
 void GhostCarApp::buildImGuiPanel() {
@@ -811,6 +1015,8 @@ void GhostCarApp::buildImGuiPanel() {
                     mPlaying = true;
                     mPaused = false;
                     showGhostCar();
+                    if (mShowDrivingLine)
+                        createDrivingLine(camLap);
                 }
             }
         } else {
@@ -827,6 +1033,7 @@ void GhostCarApp::buildImGuiPanel() {
                 mPlaying = false;
                 mPaused = false;
                 hideGhostCar();
+                destroyDrivingLine();
             }
 
             // Progress bar
@@ -852,13 +1059,9 @@ void GhostCarApp::buildImGuiPanel() {
 
     // --- Ghost Car Settings ---
     if (ImGui::CollapsingHeader("Ghost Car Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
-        bool changed = false;
-        changed |= ImGui::SliderFloat("Alpha", &mGhostAlpha, 0.05f, 1.0f);
-        changed |= ImGui::ColorEdit3("Tint", mGhostTint);
-        if (changed) {
+        if (ImGui::SliderFloat("Alpha", &mGhostAlpha, 0.05f, 1.0f)) {
             for (auto* mi : mGhostMIs) {
-                mi->setParameter("baseColor",
-                    float4{mGhostTint[0], mGhostTint[1], mGhostTint[2], mGhostAlpha});
+                mi->setParameter("alpha", mGhostAlpha);
             }
         }
 
@@ -866,6 +1069,13 @@ void GhostCarApp::buildImGuiPanel() {
         ImGui::SliderFloat("Y Offset", &mGhostYOffset, -3.0f, 3.0f);
         ImGui::SliderFloat("Rotation Offset", &mModelRotOffset, -180.0f, 180.0f, "%.0f deg");
         ImGui::Checkbox("Pitch Compensation", &mPitchCompensation);
+        if (ImGui::Checkbox("Show Driving Line", &mShowDrivingLine)) {
+            if (mShowDrivingLine && mPlaying && mCameraLapIdx >= 0) {
+                createDrivingLine(mLaps[mCameraLapIdx]);
+            } else if (!mShowDrivingLine) {
+                destroyDrivingLine();
+            }
+        }
     }
 
     // --- Camera Settings ---
@@ -875,7 +1085,16 @@ void GhostCarApp::buildImGuiPanel() {
             mCamera->setProjection(mCameraFovH, aspect, 0.1f, 2000.0f, Camera::Fov::HORIZONTAL);
         }
         ImGui::SliderFloat("Height", &mCameraHeight, 0.5f, 3.0f, "%.1f m");
+        ImGui::SliderFloat("Pitch", &mCameraPitchOffset, -10.0f, 10.0f, "%.1f deg");
+        ImGui::SliderFloat("Pan", &mCameraPanOffset, -10.0f, 10.0f, "%.1f deg");
+        ImGui::SliderFloat("Data Offset", &mDataOffsetMs, -500.0f, 500.0f, "%.0f ms");
     }
+
+    // --- Settings ---
+    ImGui::Separator();
+    if (ImGui::Button("Save Settings")) saveSettings();
+    ImGui::SameLine();
+    if (ImGui::Button("Load Settings")) loadSettings();
 
     ImGui::End();
 }
@@ -936,6 +1155,7 @@ void GhostCarApp::run() {
             if (mPlayElapsedSec >= lapDuration) {
                 mPlaying = false;
                 hideGhostCar();
+                destroyDrivingLine();
             } else {
                 // Pace video reads to match playback speed
                 double frameDuration = 1.0 / (mVideoFps * mPlaybackSpeed);
@@ -948,13 +1168,15 @@ void GhostCarApp::run() {
                     mNextFrameTime += frameDuration;
                 }
 
-                // Find camera car GPS position at this elapsed time
+                // Find camera car GPS position at this elapsed time (shifted by data offset)
+                double dataElapsed = mPlayElapsedSec + mDataOffsetMs / 1000.0;
+                dataElapsed = std::clamp(dataElapsed, 0.0, camLap.lapTimeSeconds);
                 int camIdx = findSampleAtElapsed(mVbo, camLap.startIdx, camLap.endIdx,
-                                                 mPlayElapsedSec);
+                                                 dataElapsed);
 
                 // Find ghost car GPS position at same elapsed time
                 const auto& ghostLap = mLaps[mGhostLapIdx];
-                double ghostElapsed = std::min(mPlayElapsedSec, ghostLap.lapTimeSeconds);
+                double ghostElapsed = std::min(dataElapsed, ghostLap.lapTimeSeconds);
                 int ghostIdx = findSampleAtElapsed(mVbo, ghostLap.startIdx, ghostLap.endIdx,
                                                    ghostElapsed);
 
@@ -1008,12 +1230,19 @@ void GhostCarApp::run() {
                 // Pitch the 3D camera to match the camera car's road angle
                 // so ghost car moves up/down in frame correctly on hills
                 float camPitch = mPitchCompensation ? computePitch(mVbo, camIdx) : 0.0f;
-                float lookY = mCameraHeight + 100.0f * sinf(-camPitch);
-                float lookZ = -100.0f * cosf(camPitch);
+                camPitch += mCameraPitchOffset * (float)M_PI / 180.0f;
+                float camPan = mCameraPanOffset * (float)M_PI / 180.0f;
+                float lookX = 100.0f * sinf(camPan) * cosf(camPitch);
+                float lookY = mCameraHeight + 100.0f * sinf(camPitch);
+                float lookZ = -100.0f * cosf(camPan) * cosf(camPitch);
                 mCamera->lookAt(
                     {0, mCameraHeight, 0},
-                    {0, lookY, lookZ},
+                    {lookX, lookY, lookZ},
                     {0, 1, 0});
+
+                // Update driving line overlay
+                if (mShowDrivingLine && mLineVB)
+                    updateDrivingLine(camIdx);
 
                 // Update title bar
                 char title[512];

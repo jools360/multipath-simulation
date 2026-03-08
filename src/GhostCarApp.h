@@ -67,6 +67,11 @@ private:
     int findSampleAtAviTime(const VboFile& vbo, int startIdx, int endIdx, double aviTimeMs);
     int findSampleAtElapsed(const VboFile& vbo, int startIdx, int endIdx, double elapsedSec);
     float computePitch(const VboFile& vbo, int sampleIdx, int windowSamples = 5);
+    void saveSettings();
+    void loadSettings();
+    void createDrivingLine(const LapInfo& lap);
+    void updateDrivingLine(int camIdx);
+    void destroyDrivingLine();
 
     // Filament core
     SDL_Window* mWindow = nullptr;
@@ -135,11 +140,25 @@ private:
     float mGhostTint[3] = {0.3f, 0.7f, 1.0f};
     float mCameraFovH = 90.0f;
     float mCameraHeight = 1.1f;
+    float mCameraPitchOffset = 0.0f;  // degrees, manual camera pitch adjustment
+    float mCameraPanOffset = 0.0f;    // degrees, manual camera pan (yaw) adjustment
+    float mDataOffsetMs = 0.0f;       // ms offset between video and GPS data (positive = data ahead of video)
     float mGhostYOffset = 0.0f;
     float mModelRotOffset = 180.0f;  // degrees, to align model forward direction
     bool mGhostVisible = true;
     float mGhostScale = 1.3f;
     bool mPitchCompensation = true;
+
+    // Driving line overlay (rendered as triangle strip ribbon)
+    Material* mLineMaterial = nullptr;
+    bool mShowDrivingLine = false;
+    float mLineWidth = 0.5f;  // meters
+    Entity mLineEntity;
+    VertexBuffer* mLineVB = nullptr;
+    IndexBuffer* mLineIB = nullptr;
+    MaterialInstance* mLineMI = nullptr;
+    int mLineSampleCount = 0;   // number of GPS samples in the line
+    int mLineVertexCount = 0;   // = mLineSampleCount * 2 (left/right per sample)
 
     // ImGui sidebar
     SDL_Window* mControlWindow = nullptr;

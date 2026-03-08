@@ -1,9 +1,9 @@
 material {
-    name : GhostCar,
+    name : Line,
     shadingModel : unlit,
     blending : fade,
-    depthWrite : true,
-    doubleSided : false,
+    depthWrite : false,
+    doubleSided : true,
     parameters : [
         { type : float3, name : color },
         { type : float, name : alpha }
