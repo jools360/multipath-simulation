@@ -300,3 +300,87 @@ add_custom_command(TARGET GhostCar POST_BUILD
     "${CMAKE_SOURCE_DIR}/StartFinishDataBase.xml"
     "$<TARGET_FILE_DIR:GhostCar>/StartFinishDataBase.xml"
 )
+
+# ============================================================
+# GNSSMultipath executable
+# ============================================================
+add_executable(GNSSMultipath
+    src/gnss_main.cpp
+    src/GNSSApp.cpp
+    src/GNSSAlmanac.cpp
+    src/GNSSRayTrace.cpp
+    ${IMGUI_DIR}/imgui.cpp
+    ${IMGUI_DIR}/imgui_draw.cpp
+    ${IMGUI_DIR}/imgui_tables.cpp
+    ${IMGUI_DIR}/imgui_widgets.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_sdl2.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
+)
+
+target_include_directories(GNSSMultipath PRIVATE
+    ${FILAMENT_DIR}/include
+    ${SDL2_DIR}/include
+    ${IMGUI_DIR}
+    ${IMGUI_DIR}/backends
+    ${CMAKE_SOURCE_DIR}/deps
+    src
+)
+
+target_link_directories(GNSSMultipath PRIVATE
+    ${FILAMENT_DIR}/lib/x86_64/mt
+    ${SDL2_DIR}/lib/x64
+)
+
+target_link_libraries(GNSSMultipath PRIVATE
+    filament
+    gltfio
+    gltfio_core
+    uberarchive
+    filameshio
+    backend
+    bluegl
+    bluevk
+    shaders
+    filabridge
+    filaflat
+    utils
+    geometry
+    smol-v
+    ibl
+    image
+    ktxreader
+    stb
+    uberzlib
+    dracodec
+    meshoptimizer
+    zstd
+)
+
+target_link_libraries(GNSSMultipath PRIVATE
+    SDL2
+    SDL2main
+)
+
+target_link_libraries(GNSSMultipath PRIVATE
+    opengl32
+    gdi32
+    user32
+    shlwapi
+    dwmapi
+    ws2_32
+    comdlg32
+)
+
+# Copy materials to GNSSMultipath output directory
+add_custom_command(TARGET GNSSMultipath POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${CMAKE_SOURCE_DIR}/materials/line.filamat"
+    "$<TARGET_FILE_DIR:GNSSMultipath>/line.filamat"
+)
+
+# Copy SDL2.dll to output directory
+add_custom_command(TARGET GNSSMultipath POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${SDL2_DIR}/lib/x64/SDL2.dll"
+    "$<TARGET_FILE_DIR:GNSSMultipath>/SDL2.dll"
+)
