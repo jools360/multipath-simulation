@@ -512,6 +512,8 @@ void GhostCarApp::saveSettings() {
     std::ofstream f(getSettingsPath());
     if (!f) return;
     f << "vboPath=" << mVboPath << "\n";
+    f << "useSeparateGhostVbo=" << (mUseSeparateGhostVbo ? 1 : 0) << "\n";
+    f << "ghostVboPath=" << mGhostVboPath << "\n";
     f << "ghostAlpha=" << mGhostAlpha << "\n";
     f << "cameraFovH=" << mCameraFovH << "\n";
     f << "cameraHeight=" << mCameraHeight << "\n";
@@ -538,6 +540,8 @@ void GhostCarApp::loadSettings() {
         std::string key = line.substr(0, eq);
         std::string val = line.substr(eq + 1);
         if (key == "vboPath") strncpy(mVboPath, val.c_str(), sizeof(mVboPath) - 1);
+        else if (key == "useSeparateGhostVbo") mUseSeparateGhostVbo = (val == "1");
+        else if (key == "ghostVboPath") strncpy(mGhostVboPath, val.c_str(), sizeof(mGhostVboPath) - 1);
         else if (key == "ghostAlpha") mGhostAlpha = std::stof(val);
         else if (key == "cameraFovH") mCameraFovH = std::stof(val);
         else if (key == "cameraHeight") mCameraHeight = std::stof(val);
@@ -847,12 +851,12 @@ void GhostCarApp::buildImGuiPanel() {
 
     // --- File Selection ---
     if (ImGui::CollapsingHeader("Files", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::Text("VBO File:");
+        ImGui::Text("Camera VBO File:");
         ImGui::InputText("##vbo", mVboPath, sizeof(mVboPath), ImGuiInputTextFlags_ReadOnly);
         ImGui::SameLine();
         if (ImGui::Button("Browse...##vbo")) {
 #ifdef _WIN32
-            std::string f = openFileDialogGC(NULL, "Open VBO File",
+            std::string f = openFileDialogGC(NULL, "Open Camera VBO File",
                 "VBO Files (*.vbo)\0*.vbo\0All Files\0*.*\0", "vbo");
             if (!f.empty()) {
                 strncpy(mVboPath, f.c_str(), sizeof(mVboPath) - 1);
@@ -862,12 +866,12 @@ void GhostCarApp::buildImGuiPanel() {
         }
 
         if (mVboPath[0] && !mVboLoaded) {
-            if (ImGui::Button("Load VBO")) {
+            if (ImGui::Button("Load VBO##cam")) {
                 mVbo = VboFile{};
                 mLaps.clear();
                 mCircuitDetected = false;
                 mCameraLapIdx = -1;
-                mGhostLapIdx = -1;
+                if (!mUseSeparateGhostVbo) mGhostLapIdx = -1;
                 mPlaying = false;
                 mFastestLapIdx = -1;
 
@@ -914,6 +918,78 @@ void GhostCarApp::buildImGuiPanel() {
         if (mVboLoaded) {
             ImGui::Text("Samples: %d (%.0f Hz)", (int)mVbo.samples.size(), mVbo.sampleRate);
         }
+
+        ImGui::Separator();
+        if (ImGui::Checkbox("Use separate ghost VBO", &mUseSeparateGhostVbo)) {
+            mGhostLapIdx = -1;
+            mPlaying = false;
+        }
+
+        if (mUseSeparateGhostVbo) {
+            ImGui::Text("Ghost VBO File:");
+            ImGui::InputText("##ghostvbo", mGhostVboPath, sizeof(mGhostVboPath), ImGuiInputTextFlags_ReadOnly);
+            ImGui::SameLine();
+            if (ImGui::Button("Browse...##ghostvbo")) {
+#ifdef _WIN32
+                std::string f = openFileDialogGC(NULL, "Open Ghost VBO File",
+                    "VBO Files (*.vbo)\0*.vbo\0All Files\0*.*\0", "vbo");
+                if (!f.empty()) {
+                    strncpy(mGhostVboPath, f.c_str(), sizeof(mGhostVboPath) - 1);
+                    mGhostVboLoaded = false;
+                }
+#endif
+            }
+
+            if (mGhostVboPath[0] && !mGhostVboLoaded) {
+                if (ImGui::Button("Load VBO##ghost")) {
+                    mGhostVbo = VboFile{};
+                    mGhostLaps.clear();
+                    mGhostCircuitDetected = false;
+                    mGhostLapIdx = -1;
+                    mGhostFastestLapIdx = -1;
+                    mPlaying = false;
+
+                    if (parseVboFile(mGhostVboPath, mGhostVbo)) {
+                        mGhostVboLoaded = true;
+
+                        if (!mCircuitDb.empty()) {
+                            mGhostCircuitDetected = detectCircuit(mGhostVbo, mCircuitDb, mGhostCircuit);
+                        }
+
+                        double lon1, lat1, lon2, lat2;
+                        double gw = 25.0;
+                        if (mGhostCircuitDetected) {
+                            lon1 = mGhostCircuit.sfLon; lat1 = mGhostCircuit.sfLat;
+                            lon2 = mGhostCircuit.sfOldLon; lat2 = mGhostCircuit.sfOldLat;
+                            gw = mGhostCircuit.gateWidth;
+                        } else if (mGhostVbo.hasLaptiming) {
+                            lon1 = mGhostVbo.sfLon1; lat1 = mGhostVbo.sfLat1;
+                            lon2 = mGhostVbo.sfLon2; lat2 = mGhostVbo.sfLat2;
+                        } else {
+                            lon1 = lat1 = lon2 = lat2 = 0;
+                        }
+
+                        if (lon1 != 0 || lat1 != 0) {
+                            mGhostLaps = detectLaps(mGhostVbo, lon1, lat1, lon2, lat2, gw);
+
+                            if (!mGhostLaps.empty()) {
+                                double bestTime = 1e18;
+                                for (int i = 0; i < (int)mGhostLaps.size(); i++) {
+                                    if (mGhostLaps[i].lapTimeSeconds < bestTime) {
+                                        bestTime = mGhostLaps[i].lapTimeSeconds;
+                                        mGhostFastestLapIdx = i;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (mGhostVboLoaded) {
+                ImGui::Text("Ghost samples: %d (%.0f Hz)", (int)mGhostVbo.samples.size(), mGhostVbo.sampleRate);
+            }
+        }
     }
 
     // --- Circuit Info ---
@@ -931,11 +1007,12 @@ void GhostCarApp::buildImGuiPanel() {
     }
 
     // --- Lap List ---
-    if (mVboLoaded && !mLaps.empty() &&
-        ImGui::CollapsingHeader("Laps", ImGuiTreeNodeFlags_DefaultOpen)) {
+    // Determine which laps to use for ghost selection
+    const auto& ghostLapList = (mUseSeparateGhostVbo && mGhostVboLoaded) ? mGhostLaps : mLaps;
+    int ghostFastestIdx = (mUseSeparateGhostVbo && mGhostVboLoaded) ? mGhostFastestLapIdx : mFastestLapIdx;
 
-        ImGui::Text("Select Video Lap and Ghost Lap:");
-        ImGui::Separator();
+    if (mVboLoaded && !mLaps.empty() &&
+        ImGui::CollapsingHeader("Camera Laps", ImGuiTreeNodeFlags_DefaultOpen)) {
 
         for (int i = 0; i < (int)mLaps.size(); i++) {
             const auto& lap = mLaps[i];
@@ -952,32 +1029,66 @@ void GhostCarApp::buildImGuiPanel() {
             ImGui::Text("%s", label);
             ImGui::SameLine();
 
-            char btnV[32], btnG[32];
+            char btnV[32];
             snprintf(btnV, sizeof(btnV), "Video##%d", i);
-            snprintf(btnG, sizeof(btnG), "Ghost##%d", i);
-
             bool isVideoLap = (mCameraLapIdx == i);
-            bool isGhostLap = (mGhostLapIdx == i);
-
             if (isVideoLap) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.2f, 1));
             if (ImGui::SmallButton(btnV)) mCameraLapIdx = i;
             if (isVideoLap) ImGui::PopStyleColor();
 
+            // Show ghost button on same line if using same VBO
+            if (!mUseSeparateGhostVbo || !mGhostVboLoaded) {
+                ImGui::SameLine();
+                char btnG[32];
+                snprintf(btnG, sizeof(btnG), "Ghost##c%d", i);
+                bool isGhostLap = (mGhostLapIdx == i);
+                if (isGhostLap) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.4f, 0.8f, 1));
+                if (ImGui::SmallButton(btnG)) mGhostLapIdx = i;
+                if (isGhostLap) ImGui::PopStyleColor();
+            }
+
+            if (isFastest) ImGui::PopStyleColor();
+        }
+
+        if (mCameraLapIdx >= 0) {
+            ImGui::Text("Video: Lap %d", mLaps[mCameraLapIdx].lapNumber);
+        }
+    }
+
+    // --- Ghost Laps (from separate VBO) ---
+    if (mUseSeparateGhostVbo && mGhostVboLoaded && !mGhostLaps.empty() &&
+        ImGui::CollapsingHeader("Ghost Laps", ImGuiTreeNodeFlags_DefaultOpen)) {
+
+        for (int i = 0; i < (int)mGhostLaps.size(); i++) {
+            const auto& lap = mGhostLaps[i];
+            int mins = (int)(lap.lapTimeSeconds / 60.0);
+            double secs = lap.lapTimeSeconds - mins * 60.0;
+
+            bool isFastest = (i == mGhostFastestLapIdx);
+            if (isFastest) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0, 1, 0, 1));
+
+            char label[128];
+            snprintf(label, sizeof(label), "Lap %d: %d:%06.3f%s",
+                     lap.lapNumber, mins, secs, isFastest ? " (FASTEST)" : "");
+
+            ImGui::Text("%s", label);
             ImGui::SameLine();
 
+            char btnG[32];
+            snprintf(btnG, sizeof(btnG), "Ghost##g%d", i);
+            bool isGhostLap = (mGhostLapIdx == i);
             if (isGhostLap) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.4f, 0.8f, 1));
             if (ImGui::SmallButton(btnG)) mGhostLapIdx = i;
             if (isGhostLap) ImGui::PopStyleColor();
 
             if (isFastest) ImGui::PopStyleColor();
         }
+    }
 
-        ImGui::Separator();
-        if (mCameraLapIdx >= 0) {
-            ImGui::Text("Video: Lap %d", mLaps[mCameraLapIdx].lapNumber);
-        }
-        if (mGhostLapIdx >= 0) {
-            ImGui::Text("Ghost: Lap %d", mLaps[mGhostLapIdx].lapNumber);
+    // Show selected laps summary
+    if (mVboLoaded && mCameraLapIdx >= 0) {
+        if (mGhostLapIdx >= 0 && !ghostLapList.empty()) {
+            ImGui::Text("Ghost: Lap %d", ghostLapList[mGhostLapIdx].lapNumber);
         }
     }
 
@@ -1175,13 +1286,15 @@ void GhostCarApp::run() {
                                                  dataElapsed);
 
                 // Find ghost car GPS position at same elapsed time
-                const auto& ghostLap = mLaps[mGhostLapIdx];
+                const VboFile& ghostVbo = (mUseSeparateGhostVbo && mGhostVboLoaded) ? mGhostVbo : mVbo;
+                const auto& ghostLaps = (mUseSeparateGhostVbo && mGhostVboLoaded) ? mGhostLaps : mLaps;
+                const auto& ghostLap = ghostLaps[mGhostLapIdx];
                 double ghostElapsed = std::min(dataElapsed, ghostLap.lapTimeSeconds);
-                int ghostIdx = findSampleAtElapsed(mVbo, ghostLap.startIdx, ghostLap.endIdx,
+                int ghostIdx = findSampleAtElapsed(ghostVbo, ghostLap.startIdx, ghostLap.endIdx,
                                                    ghostElapsed);
 
                 const auto& camSample = mVbo.samples[camIdx];
-                const auto& ghostSample = mVbo.samples[ghostIdx];
+                const auto& ghostSample = ghostVbo.samples[ghostIdx];
 
                 // Convert GPS to local meters
                 double camEast, camNorth, ghostEast, ghostNorth;
@@ -1218,7 +1331,7 @@ void GhostCarApp::run() {
                 float ghostYRot = -(float)(headingDiff * M_PI / 180.0);
 
                 // Compute ghost car pitch from height gradient
-                float ghostPitch = mPitchCompensation ? computePitch(mVbo, ghostIdx) : 0.0f;
+                float ghostPitch = mPitchCompensation ? computePitch(ghostVbo, ghostIdx) : 0.0f;
 
                 if (mGhostVisible && relForward > 0) {
                     showGhostCar();
@@ -1248,7 +1361,7 @@ void GhostCarApp::run() {
                 char title[512];
                 snprintf(title, sizeof(title),
                     "GhostCar - Lap %d vs %d | %.1fs | dist=%.1fm | camPitch=%.1f° ghostPitch=%.1f°",
-                    mLaps[mCameraLapIdx].lapNumber, mLaps[mGhostLapIdx].lapNumber,
+                    mLaps[mCameraLapIdx].lapNumber, ghostLaps[mGhostLapIdx].lapNumber,
                     mPlayElapsedSec,
                     sqrt(dEast * dEast + dNorth * dNorth),
                     camPitch * 180.0f / (float)M_PI,
@@ -1264,12 +1377,14 @@ void GhostCarApp::run() {
             dataElapsed = std::clamp(dataElapsed, 0.0, camLap.lapTimeSeconds);
             int camIdx = findSampleAtElapsed(mVbo, camLap.startIdx, camLap.endIdx, dataElapsed);
 
-            const auto& ghostLap = mLaps[mGhostLapIdx];
+            const VboFile& ghostVbo = (mUseSeparateGhostVbo && mGhostVboLoaded) ? mGhostVbo : mVbo;
+            const auto& ghostLaps = (mUseSeparateGhostVbo && mGhostVboLoaded) ? mGhostLaps : mLaps;
+            const auto& ghostLap = ghostLaps[mGhostLapIdx];
             double ghostElapsed = std::min(dataElapsed, ghostLap.lapTimeSeconds);
-            int ghostIdx = findSampleAtElapsed(mVbo, ghostLap.startIdx, ghostLap.endIdx, ghostElapsed);
+            int ghostIdx = findSampleAtElapsed(ghostVbo, ghostLap.startIdx, ghostLap.endIdx, ghostElapsed);
 
             const auto& camSample = mVbo.samples[camIdx];
-            const auto& ghostSample = mVbo.samples[ghostIdx];
+            const auto& ghostSample = ghostVbo.samples[ghostIdx];
 
             double ghostEast, ghostNorth;
             gpsToLocalMeters(ghostSample.latitude, ghostSample.longitude,
@@ -1289,7 +1404,7 @@ void GhostCarApp::run() {
             while (headingDiff > 180.0) headingDiff -= 360.0;
             while (headingDiff < -180.0) headingDiff += 360.0;
             float ghostYRot = -(float)(headingDiff * M_PI / 180.0);
-            float ghostPitch = mPitchCompensation ? computePitch(mVbo, ghostIdx) : 0.0f;
+            float ghostPitch = mPitchCompensation ? computePitch(ghostVbo, ghostIdx) : 0.0f;
 
             if (mGhostVisible && relForward > 0) {
                 showGhostCar();

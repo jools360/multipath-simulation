@@ -116,13 +116,22 @@ private:
     double mVideoFps = 25.0;
     bool mVideoOpen = false;
 
-    // VBO data
+    // VBO data (camera)
     VboFile mVbo;
     std::vector<CircuitInfo> mCircuitDb;
     CircuitInfo mCircuit;
     bool mCircuitDetected = false;
     std::vector<LapInfo> mLaps;
     int mFastestLapIdx = -1;
+
+    // VBO data (ghost - optional, separate file)
+    VboFile mGhostVbo;
+    CircuitInfo mGhostCircuit;
+    bool mGhostCircuitDetected = false;
+    std::vector<LapInfo> mGhostLaps;
+    int mGhostFastestLapIdx = -1;
+    bool mGhostVboLoaded = false;
+    char mGhostVboPath[512] = "";
 
     // Lap selection & playback
     int mCameraLapIdx = -1;
@@ -172,6 +181,7 @@ private:
     char mVboPath[512] = "C:\\Users\\julia\\Dropbox\\Claude Code\\GhostCar\\VBOX data\\VBOX0006.vbo";
     char mDbPath[512] = "";
     bool mVboLoaded = false;
+    bool mUseSeparateGhostVbo = false;
 
     // Window size
     int mWinWidth = 1920;
