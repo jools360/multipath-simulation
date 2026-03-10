@@ -75,15 +75,6 @@ GNSSApp::~GNSSApp() {
         if (mReceiverVB) mEngine->destroy(mReceiverVB);
         if (mReceiverIB) mEngine->destroy(mReceiverIB);
 
-        // Ground plane
-        if (!mGroundEntity.isNull()) {
-            mEngine->getRenderableManager().destroy(mGroundEntity);
-            EntityManager::get().destroy(mGroundEntity);
-        }
-        if (mGroundMI) mEngine->destroy(mGroundMI);
-        if (mGroundVB) mEngine->destroy(mGroundVB);
-        if (mGroundIB) mEngine->destroy(mGroundIB);
-
         // Material instances
         if (mLOSMI) mEngine->destroy(mLOSMI);
         if (mBlockedMI) mEngine->destroy(mBlockedMI);
@@ -237,45 +228,9 @@ bool GNSSApp::init() {
         mReceiverMI->setParameter("color", float3{1.0f, 0.0f, 0.0f}); // red
         mReceiverMI->setParameter("alpha", 1.0f);
 
-        mGroundMI = mLineMaterial->createInstance();
-        mGroundMI->setParameter("color", float3{0.25f, 0.25f, 0.25f}); // dark grey
-        mGroundMI->setParameter("alpha", 0.4f);
     }
 
-    // Create ground plane (large flat quad)
-    {
-        float sz = 600.0f;
-        static LineVertex gVerts[4] = {
-            {{-sz, 0, -sz}, {0,0,0,32767}},
-            {{ sz, 0, -sz}, {0,0,0,32767}},
-            {{ sz, 0,  sz}, {0,0,0,32767}},
-            {{-sz, 0,  sz}, {0,0,0,32767}},
-        };
-        static uint16_t gIdx[6] = {0,2,1, 0,3,2};
 
-        mGroundVB = VertexBuffer::Builder()
-            .vertexCount(4).bufferCount(1)
-            .attribute(VertexAttribute::POSITION, 0, VertexBuffer::AttributeType::FLOAT3,
-                       offsetof(LineVertex, position), sizeof(LineVertex))
-            .attribute(VertexAttribute::TANGENTS, 0, VertexBuffer::AttributeType::SHORT4,
-                       offsetof(LineVertex, tangents), sizeof(LineVertex))
-            .normalized(VertexAttribute::TANGENTS)
-            .build(*mEngine);
-        mGroundVB->setBufferAt(*mEngine, 0, VertexBuffer::BufferDescriptor(gVerts, sizeof(gVerts)));
-
-        mGroundIB = IndexBuffer::Builder()
-            .indexCount(6).bufferType(IndexBuffer::IndexType::USHORT).build(*mEngine);
-        mGroundIB->setBuffer(*mEngine, IndexBuffer::BufferDescriptor(gIdx, sizeof(gIdx)));
-
-        mGroundEntity = EntityManager::get().create();
-        RenderableManager::Builder(1)
-            .boundingBox({{-sz,-1,-sz},{sz,1,sz}})
-            .geometry(0, RenderableManager::PrimitiveType::TRIANGLES, mGroundVB, mGroundIB, 0, 6)
-            .material(0, mGroundMI)
-            .culling(false).castShadows(false).receiveShadows(false)
-            .build(*mEngine, mGroundEntity);
-        mScene->addEntity(mGroundEntity);
-    }
 
     // Create receiver marker (red cube)
     {
@@ -346,7 +301,7 @@ bool GNSSApp::init() {
             if (dpiScale < 1.0f) dpiScale = 1.0f;
         }
     }
-    mSidebarWidth = (int)(400 * dpiScale);
+    mSidebarWidth = (int)(450 * dpiScale);
 
     int mainX, mainY;
     SDL_GetWindowPosition(mWindow, &mainX, &mainY);
@@ -1103,7 +1058,7 @@ void GNSSApp::loadSettings() {
 void GNSSApp::drawSkyPlot() {
     // Polar plot of satellite positions within the ImGui window
     ImVec2 avail = ImGui::GetContentRegionAvail();
-    float plotSize = std::min(avail.x - 10.0f, 280.0f);
+    float plotSize = std::min(avail.x - 20.0f, 400.0f);
     if (plotSize < 100) return;
 
     float radius = plotSize * 0.45f;
@@ -1138,8 +1093,10 @@ void GNSSApp::drawSkyPlot() {
     // Plot satellites
     for (const auto& sat : mSatPositions) {
         if (!sat.healthy) continue;
+        if (sat.elevationDeg < 0) continue;
 
-        float r = radius * (1.0f - (float)sat.elevationDeg / 90.0f);
+        float elClamped = std::clamp((float)sat.elevationDeg, 0.0f, 90.0f);
+        float r = radius * (1.0f - elClamped / 90.0f);
         float azRad = (float)(sat.azimuthDeg * M_PI / 180.0);
         // In the plot: up = North, right = East
         float px = center.x + r * sinf(azRad);
@@ -1184,7 +1141,8 @@ void GNSSApp::buildImGuiPanel() {
     ImGui::SetNextWindowSize(ImVec2((float)cw, (float)ch));
     ImGui::Begin("GNSS Multipath", nullptr,
         ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
+        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar |
+        ImGuiWindowFlags_AlwaysVerticalScrollbar);
 
     // --- Files ---
     if (ImGui::CollapsingHeader("Files", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1236,12 +1194,14 @@ void GNSSApp::buildImGuiPanel() {
         bool changed = false;
         changed |= ImGui::InputDouble("Latitude", &mReceiverLat, 0.0001, 0.01, "%.6f");
         changed |= ImGui::InputDouble("Longitude", &mReceiverLon, 0.0001, 0.01, "%.6f");
-        if (ImGui::Button("-##ah")) { mAntennaHeight = std::max(0.0f, mAntennaHeight - 1.0f); changed = true; }
-        ImGui::SameLine();
-        if (ImGui::Button("+##ah")) { mAntennaHeight += 1.0f; changed = true; }
-        ImGui::SameLine();
-        changed |= ImGui::DragFloat("Antenna Height (m)", &mAntennaHeight, 0.5f, 0.0f, 500.0f, "%.1f");
-        ImGui::SetItemTooltip("Height of antenna in the 3D scene. Use A/Z keys to move up/down.");
+        {
+            double h = (double)mAntennaHeight;
+            if (ImGui::InputDouble("Height (m)", &h, 1.0, 10.0, "%.1f")) {
+                mAntennaHeight = (float)h;
+                changed = true;
+            }
+            ImGui::SetItemTooltip("Height of antenna in the 3D scene. Use A/Z keys to move up/down.");
+        }
         changed |= ImGui::InputDouble("Ground Elevation (m)", &mGroundElevation, 1.0, 10.0, "%.1f");
         ImGui::SetItemTooltip("Ground height above WGS-84 ellipsoid (has negligible effect on satellite positions)");
 
@@ -1313,11 +1273,13 @@ void GNSSApp::buildImGuiPanel() {
             bool originChanged = false;
             originChanged |= ImGui::InputDouble("Model Origin Lat", &mModelOriginLat, 0.0001, 0.001, "%.6f");
             originChanged |= ImGui::InputDouble("Model Origin Lon", &mModelOriginLon, 0.0001, 0.001, "%.6f");
-            if (ImGui::Button("-##moh")) { mModelOriginHeight -= 1.0f; originChanged = true; }
-            ImGui::SameLine();
-            if (ImGui::Button("+##moh")) { mModelOriginHeight += 1.0f; originChanged = true; }
-            ImGui::SameLine();
-            originChanged |= ImGui::DragFloat("Model Origin Height", &mModelOriginHeight, 0.1f, -500.0f, 500.0f, "%.1f m");
+            {
+                double h = (double)mModelOriginHeight;
+                if (ImGui::InputDouble("Model Origin Height", &h, 1.0, 10.0, "%.1f")) {
+                    mModelOriginHeight = (float)h;
+                    originChanged = true;
+                }
+            }
             if (originChanged) {
                 // Recompute trajectory model positions
                 for (auto& pt : mTrajectory) {
@@ -1393,11 +1355,6 @@ void GNSSApp::buildImGuiPanel() {
         }
     }
 
-    // --- Recompute button ---
-    if (ImGui::Button("Recompute Signals", ImVec2(-1, 30))) {
-        mNeedsRecompute = true;
-    }
-
     // --- Display options ---
     if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_DefaultOpen)) {
         bool changed = false;
@@ -1420,7 +1377,7 @@ void GNSSApp::buildImGuiPanel() {
         ImGui::Separator();
         // Satellite table
         if (ImGui::BeginTable("sats", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                              ImGuiTableFlags_ScrollY, ImVec2(0, 150))) {
+                              ImGuiTableFlags_ScrollY, ImVec2(0, 300))) {
             ImGui::TableSetupColumn("PRN", ImGuiTableColumnFlags_WidthFixed, 40);
             ImGui::TableSetupColumn("Az", ImGuiTableColumnFlags_WidthFixed, 50);
             ImGui::TableSetupColumn("El", ImGuiTableColumnFlags_WidthFixed, 50);
@@ -1550,8 +1507,12 @@ void GNSSApp::run() {
                 }
             }
             else if (event.type == SDL_MOUSEWHEEL && event.wheel.windowID == mMainWindowID) {
-                mCameraDistance *= (event.wheel.y > 0) ? 0.9f : 1.1f;
-                mCameraDistance = std::clamp(mCameraDistance, 10.0f, 3000.0f);
+                float scroll = event.wheel.preciseY;
+                if (scroll != 0.0f) {
+                    float zoomFactor = 1.0f - scroll * 0.1f;
+                    mCameraDistance *= zoomFactor;
+                    mCameraDistance = std::clamp(mCameraDistance, 10.0f, 3000.0f);
+                }
             }
             else if (event.type == SDL_KEYDOWN && event.key.windowID == mMainWindowID) {
                 auto key = event.key.keysym.sym;
@@ -1566,7 +1527,7 @@ void GNSSApp::run() {
                 if (key == SDLK_UP)    { mReceiverPos.x -= mMoveSpeed * sinYaw; mReceiverPos.z -= mMoveSpeed * cosYaw; moved = true; }
                 if (key == SDLK_DOWN)  { mReceiverPos.x += mMoveSpeed * sinYaw; mReceiverPos.z += mMoveSpeed * cosYaw; moved = true; }
                 if (key == SDLK_a)     { mAntennaHeight += mMoveSpeed; moved = true; }
-                if (key == SDLK_z)     { mAntennaHeight -= mMoveSpeed; if (mAntennaHeight < 0) mAntennaHeight = 0; moved = true; }
+                if (key == SDLK_z)     { mAntennaHeight -= mMoveSpeed; moved = true; }
                 if (key == SDLK_ESCAPE) mRunning = false;
                 if (key == SDLK_TAB) {
                     // Toggle sidebar
