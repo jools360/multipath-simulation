@@ -1,8 +1,24 @@
-# GhostCar
+# Multipath Simulation
 
-Two 3D rendering applications built on Google's Filament engine (Vulkan backend), Windows-only.
+Three 3D rendering applications built on Google's Filament engine (Vulkan backend), Windows-only.
 
 ## Applications
+
+### GNSSMultipath
+
+A GNSS satellite signal multipath simulation tool. Loads a 3D building model (GLB), computes satellite positions from a GPS YUMA almanac, and uses CPU ray tracing to determine line-of-sight, blockage, and single-bounce reflections off building surfaces.
+
+**Features:**
+- GPS YUMA almanac parsing with Keplerian orbit propagation
+- BVH-accelerated ray tracing against 3D building geometry
+- Signal classification: LOS (green), blocked (red), reflected (orange)
+- Single-bounce specular reflection detection using mirror-image method
+- KML trajectory loading with animated playback along the route
+- Configurable model origin alignment (lat/lon/height) for trajectory overlay
+- Sky plot with colour-coded satellite positions
+- Signal analysis table with per-satellite status and multipath delay
+- Orbit camera with mouse controls (drag to orbit, middle-click to pan, scroll to zoom)
+- Settings save/load for all parameters
 
 ### FilamentCone
 
@@ -105,6 +121,31 @@ VBOX HD2 data logger files (`.vbo`) are space-delimited text with sections in `[
 
 Supports VIPS (AirPixel proprietary) and FreeD protocols over RS-232 or UDP. Auto-detect mode identifies the protocol automatically. Configure in the ImGui control panel.
 
+## GNSSMultipath Usage
+
+1. Run `build/Release/GNSSMultipath.exe`
+2. In **Files**, browse for a building model GLB (e.g. `London.glb`) and a YUMA almanac file (`.alm`)
+3. Click **Load Almanac** to parse satellite data
+4. In **Receiver**, set your latitude, longitude, and antenna height
+5. In **Date & Time**, set the UTC time for satellite position computation
+6. Signal lines appear automatically: green (LOS), red (blocked), orange (reflected)
+7. In **Trajectory**, browse for a KML file and click **Load KML**
+8. Adjust **Model Origin Lat/Lon/Height** to align the trajectory with the 3D model
+9. Click **Play** to animate the receiver along the trajectory
+10. Use **Save Settings** / **Load Settings** to persist all parameters
+
+### Controls
+
+| Input | Action |
+|-------|--------|
+| Left drag | Orbit camera |
+| Middle drag | Pan camera |
+| Scroll wheel | Zoom in/out |
+| Arrow keys | Move receiver horizontally |
+| A / Z | Move receiver up / down |
+| Tab | Toggle sidebar |
+| ESC | Exit |
+
 ## Project Structure
 
 ```
@@ -114,6 +155,10 @@ src/
   ghostcar_main.cpp      GhostCar entry point
   GhostCarApp.cpp/h      GhostCar application
   VboParser.cpp/h        VBO file and circuit database parser
+  gnss_main.cpp          GNSSMultipath entry point
+  GNSSApp.cpp/h          GNSSMultipath application
+  GNSSAlmanac.cpp/h      YUMA almanac parser and orbit propagation
+  GNSSRayTrace.cpp/h     BVH ray tracer and GLB mesh extraction
   SceneManager.cpp/h     Scene save/load, GLB loading
   WebcamCapture.cpp/h    DirectShow webcam capture
   TrackingSystem.cpp/h   Camera tracking (VIPS/FreeD)
