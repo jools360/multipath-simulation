@@ -59,7 +59,7 @@ private:
     void createLighting();
     void loadBuildingModel(const std::string& path);
     void analyzeSignals();
-    void findReflections(const float3& satDir, int prn, float elDeg, float azDeg);
+    void findReflections(const float3& antennaPos, const float3& satDir, int prn, float elDeg, float azDeg);
     void updateSignalLines();
     void destroySignalLines();
     void buildImGuiPanel();
@@ -94,7 +94,10 @@ private:
 
     // Lighting
     Entity mSunLight;
+    Entity mFillLight;
+    Entity mBackLight;
     IndirectLight* mIndirectLight = nullptr;
+    float mIBLIntensity = 50000.0f;
 
     // Mesh data for ray tracing (CPU-side)
     gnss::BVH mBVH;
@@ -109,8 +112,9 @@ private:
     double mReceiverLat = 51.5074;    // London default
     double mReceiverLon = -0.1278;
     double mGroundElevation = 11.0;   // Ground elevation above WGS-84 ellipsoid (metres) - London ~11m
-    float3 mReceiverPos = {0, 1.5f, 0}; // Antenna phase center in model coords
-    float mAntennaHeight = 1.5f;         // Antenna height above ground (metres)
+    float3 mReceiverPos = {0, 1.5f, 0}; // Car base position in model coords
+    float mAntennaHeight = 1.5f;         // Height above ground for car base (metres)
+    float mAntennaRoofOffset = 1.8f;     // Antenna height above car base (metres) - on roof
 
     // UTC time for satellite computation
     int mYear = 2024, mMonth = 1, mDay = 15;
@@ -156,7 +160,7 @@ private:
     std::vector<SignalResult> mSignals;
     float mDomeRadius = 300.0f;          // visual dome radius for signal lines (meters)
     float mMaxReflectionRange = 200.0f;  // max distance to check for reflections (meters)
-    float mLineWidth = 1.0f;             // signal line width in metres
+    float mLineWidth = 0.2f;             // signal line width in metres
 
     // Signal line rendering (3 batches: LOS, blocked, reflected)
     Material* mLineMaterial = nullptr;
@@ -179,17 +183,12 @@ private:
     Entity mReflectedEntity;
     int mReflectedVertexCount = 0;
 
-    // Receiver marker
-    VertexBuffer* mReceiverVB = nullptr;
-    IndexBuffer* mReceiverIB = nullptr;
-    MaterialInstance* mReceiverMI = nullptr;
-    Entity mReceiverEntity;
-
-    // Ground plane
-    VertexBuffer* mGroundVB = nullptr;
-    IndexBuffer* mGroundIB = nullptr;
-    MaterialInstance* mGroundMI = nullptr;
-    Entity mGroundEntity;
+    // Receiver car model
+    filament::gltfio::FilamentAsset* mCarAsset = nullptr;
+    float mReceiverYaw = 0.0f;  // heading in radians (Filament Y-axis rotation)
+    float mCarScale = 1.0f;
+    char mCarModelPath[512] = "Ford_Mustang_Mach-E_2021.glb";
+    void loadCarModel(const std::string& path);
 
     // Camera orbit controls
     float mCameraDistance = 500.0f;
@@ -217,6 +216,7 @@ private:
     bool mShowLOS = true;
     bool mShowBlocked = true;
     bool mShowReflected = true;
+    bool mShowTrajectory = true;
     float mMoveSpeed = 5.0f;  // meters per key press
 
     // Stats

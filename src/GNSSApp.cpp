@@ -66,14 +66,11 @@ GNSSApp::~GNSSApp() {
         destroySignalLines();
         destroyTrajectoryLine();
 
-        // Receiver marker
-        if (!mReceiverEntity.isNull()) {
-            mEngine->getRenderableManager().destroy(mReceiverEntity);
-            EntityManager::get().destroy(mReceiverEntity);
+        // Car model
+        if (mCarAsset) {
+            mScene->removeEntities(mCarAsset->getEntities(), mCarAsset->getEntityCount());
+            mAssetLoader->destroyAsset(mCarAsset);
         }
-        if (mReceiverMI) mEngine->destroy(mReceiverMI);
-        if (mReceiverVB) mEngine->destroy(mReceiverVB);
-        if (mReceiverIB) mEngine->destroy(mReceiverIB);
 
         // Material instances
         if (mLOSMI) mEngine->destroy(mLOSMI);
@@ -95,6 +92,8 @@ GNSSApp::~GNSSApp() {
         mEngine->destroyCameraComponent(mCameraEntity);
         EntityManager::get().destroy(mCameraEntity);
         EntityManager::get().destroy(mSunLight);
+        EntityManager::get().destroy(mFillLight);
+        EntityManager::get().destroy(mBackLight);
         if (mIndirectLight) mEngine->destroy(mIndirectLight);
         if (mSkybox) mEngine->destroy(mSkybox);
 
@@ -140,10 +139,19 @@ bool GNSSApp::init() {
         return false;
     }
 
-    mWindow = SDL_CreateWindow("GNSS Multipath Simulation",
-        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        mWinWidth, mWinHeight,
-        SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+    {
+        SDL_Rect bounds = {};
+        SDL_GetDisplayUsableBounds(0, &bounds);
+        int sidebarW = 500;
+        // Available width for the main window (right of sidebar)
+        int availW = bounds.w - sidebarW;
+        int winW = std::min(mWinWidth, availW);
+        int winX = bounds.x + sidebarW + (availW - winW) / 2;
+        int winY = bounds.y + (bounds.h - mWinHeight) / 2;
+        mWindow = SDL_CreateWindow("GNSS Multipath Simulation",
+            winX, winY, winW, mWinHeight,
+            SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+    }
     if (!mWindow) return false;
 
     void* nativeWindow = nullptr;
@@ -224,66 +232,10 @@ bool GNSSApp::init() {
         mReflectedMI->setParameter("color", float3{1.0f, 0.6f, 0.0f}); // orange
         mReflectedMI->setParameter("alpha", 0.9f);
 
-        mReceiverMI = mLineMaterial->createInstance();
-        mReceiverMI->setParameter("color", float3{1.0f, 0.0f, 0.0f}); // red
-        mReceiverMI->setParameter("alpha", 1.0f);
-
     }
 
-
-
-    // Create receiver marker (red cube)
-    {
-        float s = 2.0f; // half-size of cube
-        // 8 corners of the cube
-        // Tangents encode normals — use a simple up-facing tangent for all verts
-        // (unlit material so it doesn't matter for shading)
-        static LineVertex rVerts[8] = {
-            {{-s, -s, -s}, {0,0,0,32767}},  // 0: left  bottom back
-            {{ s, -s, -s}, {0,0,0,32767}},  // 1: right bottom back
-            {{ s, -s,  s}, {0,0,0,32767}},  // 2: right bottom front
-            {{-s, -s,  s}, {0,0,0,32767}},  // 3: left  bottom front
-            {{-s,  s, -s}, {0,0,0,32767}},  // 4: left  top    back
-            {{ s,  s, -s}, {0,0,0,32767}},  // 5: right top    back
-            {{ s,  s,  s}, {0,0,0,32767}},  // 6: right top    front
-            {{-s,  s,  s}, {0,0,0,32767}},  // 7: left  top    front
-        };
-        // 12 triangles (6 faces x 2)
-        static uint16_t rIdx[36] = {
-            0,2,1, 0,3,2,  // bottom
-            4,5,6, 4,6,7,  // top
-            0,1,5, 0,5,4,  // back
-            2,3,7, 2,7,6,  // front
-            0,4,7, 0,7,3,  // left
-            1,2,6, 1,6,5,  // right
-        };
-
-        mReceiverVB = VertexBuffer::Builder()
-            .vertexCount(8).bufferCount(1)
-            .attribute(VertexAttribute::POSITION, 0, VertexBuffer::AttributeType::FLOAT3,
-                       offsetof(LineVertex, position), sizeof(LineVertex))
-            .attribute(VertexAttribute::TANGENTS, 0, VertexBuffer::AttributeType::SHORT4,
-                       offsetof(LineVertex, tangents), sizeof(LineVertex))
-            .normalized(VertexAttribute::TANGENTS)
-            .build(*mEngine);
-        mReceiverVB->setBufferAt(*mEngine, 0, VertexBuffer::BufferDescriptor(rVerts, sizeof(rVerts)));
-
-        mReceiverIB = IndexBuffer::Builder()
-            .indexCount(36).bufferType(IndexBuffer::IndexType::USHORT).build(*mEngine);
-        mReceiverIB->setBuffer(*mEngine, IndexBuffer::BufferDescriptor(rIdx, sizeof(rIdx)));
-
-        mReceiverEntity = EntityManager::get().create();
-        auto& tcm = mEngine->getTransformManager();
-        tcm.create(mReceiverEntity);
-
-        RenderableManager::Builder(1)
-            .boundingBox({{-s,-s,-s},{s,s,s}})
-            .geometry(0, RenderableManager::PrimitiveType::TRIANGLES, mReceiverVB, mReceiverIB, 0, 36)
-            .material(0, mReceiverMI)
-            .culling(false).castShadows(false).receiveShadows(false)
-            .build(*mEngine, mReceiverEntity);
-        mScene->addEntity(mReceiverEntity);
-    }
+    // Load receiver car model
+    loadCarModel(mCarModelPath);
 
     // --- ImGui sidebar setup ---
     mMainWindowID = SDL_GetWindowID(mWindow);
@@ -360,6 +312,11 @@ bool GNSSApp::init() {
 
     loadSettings();
 
+    // Apply loaded IBL intensity (createLighting used the default before loadSettings ran)
+    if (mIndirectLight) {
+        mIndirectLight->setIntensity(mIBLIntensity);
+    }
+
     // Try to auto-load building model
     if (mBuildingModelPath[0]) {
         loadBuildingModel(mBuildingModelPath);
@@ -382,23 +339,53 @@ void GNSSApp::createCamera() {
 
 void GNSSApp::createLighting() {
     EntityManager& em = EntityManager::get();
-    mSunLight = em.create();
 
+    // Main sun light
+    mSunLight = em.create();
     LightManager::Builder(LightManager::Type::SUN)
         .color({1.0f, 0.95f, 0.9f})
-        .intensity(80000.0f)
+        .intensity(100000.0f)
         .direction({-0.3f, -1.0f, -0.4f})
         .castShadows(true)
         .build(*mEngine, mSunLight);
     mScene->addEntity(mSunLight);
 
-    // Simple ambient IBL
-    static float3 sh[9] = {};
-    sh[0] = {0.8f, 0.85f, 0.9f};
+    // Fill light from opposite side to lift shadows
+    mFillLight = em.create();
+    LightManager::Builder(LightManager::Type::DIRECTIONAL)
+        .color({0.85f, 0.9f, 1.0f})
+        .intensity(40000.0f)
+        .direction({0.4f, -0.3f, 0.3f})
+        .castShadows(false)
+        .build(*mEngine, mFillLight);
+    mScene->addEntity(mFillLight);
+
+    // Back/rim light from behind
+    mBackLight = em.create();
+    LightManager::Builder(LightManager::Type::DIRECTIONAL)
+        .color({1.0f, 0.95f, 0.9f})
+        .intensity(25000.0f)
+        .direction({0.0f, -0.4f, -0.8f})
+        .castShadows(false)
+        .build(*mEngine, mBackLight);
+    mScene->addEntity(mBackLight);
+
+    // Ambient IBL
+    static float3 sh[9] = {
+        {1.0f,  1.0f,  1.05f},    // L00: ambient base
+        {0.0f,  0.1f,  0.0f},     // L1-1
+        {0.4f,  0.4f,  0.45f},    // L10: sky brighter above
+        {0.1f,  0.1f,  0.1f},     // L11
+        {0.0f,  0.0f,  0.0f},     // L2-2
+        {0.0f,  0.0f,  0.0f},     // L2-1
+        {-0.05f,-0.05f,-0.05f},   // L20: vertical contrast
+        {0.0f,  0.0f,  0.0f},     // L21
+        {0.0f,  0.0f,  0.0f},     // L22
+    };
 
     mIndirectLight = IndirectLight::Builder()
         .irradiance(3, sh)
-        .intensity(25000.0f)
+        .intensity(mIBLIntensity)
         .build(*mEngine);
     mScene->setIndirectLight(mIndirectLight);
 }
@@ -475,6 +462,57 @@ void GNSSApp::loadBuildingModel(const std::string& path) {
     }
 }
 
+void GNSSApp::loadCarModel(const std::string& path) {
+    // Remove old car asset
+    if (mCarAsset) {
+        mScene->removeEntities(mCarAsset->getEntities(), mCarAsset->getEntityCount());
+        mAssetLoader->destroyAsset(mCarAsset);
+        mCarAsset = nullptr;
+    }
+
+    // Search for the file in common locations
+    std::vector<std::string> paths = { path };
+#ifdef _WIN32
+    char exePath[MAX_PATH];
+    GetModuleFileNameA(NULL, exePath, MAX_PATH);
+    std::string ed(exePath);
+    size_t s = ed.find_last_of("\\/");
+    if (s != std::string::npos) {
+        std::string exeDir = ed.substr(0, s + 1);
+        paths.insert(paths.begin(), exeDir + path);
+        paths.push_back(exeDir + "..\\..\\" + path);
+        paths.push_back(exeDir + "..\\" + path);
+    }
+#endif
+
+    std::ifstream file;
+    std::string foundPath;
+    for (const auto& p : paths) {
+        file.open(p, std::ios::binary);
+        if (file) { foundPath = p; break; }
+    }
+    if (!file) {
+        std::cerr << "Cannot find car model: " << path << std::endl;
+        return;
+    }
+
+    std::vector<uint8_t> data((std::istreambuf_iterator<char>(file)),
+                               std::istreambuf_iterator<char>());
+    file.close();
+    std::cout << "Loading car model: " << foundPath << " (" << data.size() << " bytes)" << std::endl;
+
+    mCarAsset = mAssetLoader->createAsset(data.data(), (uint32_t)data.size());
+    if (!mCarAsset) {
+        std::cerr << "Failed to parse car GLB" << std::endl;
+        return;
+    }
+    mResourceLoader->loadResources(mCarAsset);
+    mCarAsset->releaseSourceData();
+    mScene->addEntities(mCarAsset->getEntities(), mCarAsset->getEntityCount());
+
+    std::cout << "Car model loaded" << std::endl;
+}
+
 void GNSSApp::analyzeSignals() {
     mSignals.clear();
     mLOSCount = 0;
@@ -482,6 +520,9 @@ void GNSSApp::analyzeSignals() {
     mReflectedCount = 0;
 
     if (!mMeshLoaded || mSatPositions.empty()) return;
+
+    // Antenna position is above the car base
+    float3 antennaPos = mReceiverPos + float3{0, mAntennaRoofOffset, 0};
 
     for (const auto& sat : mSatPositions) {
         if (!sat.visible || !sat.healthy) continue;
@@ -500,8 +541,8 @@ void GNSSApp::analyzeSignals() {
             -cosf(el) * cosf(azRotated)
         };
 
-        // LOS check: trace ray from receiver toward satellite
-        auto losHit = mBVH.trace(mReceiverPos, satDir, 2000.0f);
+        // LOS check: trace ray from antenna toward satellite
+        auto losHit = mBVH.trace(antennaPos, satDir, 2000.0f);
 
         if (!losHit.hit) {
             // Clear line of sight
@@ -527,11 +568,11 @@ void GNSSApp::analyzeSignals() {
         }
 
         // Always check for reflections (both LOS and NLOS satellites can cause multipath)
-        findReflections(satDir, sat.prn, (float)sat.elevationDeg, (float)sat.azimuthDeg);
+        findReflections(antennaPos, satDir, sat.prn, (float)sat.elevationDeg, (float)sat.azimuthDeg);
     }
 }
 
-void GNSSApp::findReflections(const float3& satDir, int prn, float elDeg, float azDeg) {
+void GNSSApp::findReflections(const float3& antennaPos, const float3& satDir, int prn, float elDeg, float azDeg) {
     // For each triangle near the receiver, check if a single-bounce reflection
     // from the satellite direction reaches the receiver
     const auto& triangles = mBVH.triangles();
@@ -540,9 +581,9 @@ void GNSSApp::findReflections(const float3& satDir, int prn, float elDeg, float 
     for (int ti = 0; ti < (int)triangles.size(); ti++) {
         const auto& tri = triangles[ti];
 
-        // Quick distance check (centroid to receiver)
+        // Quick distance check (centroid to antenna)
         float3 centroid = (tri.v0 + tri.v1 + tri.v2) * (1.0f / 3.0f);
-        float3 toReceiver = mReceiverPos - centroid;
+        float3 toReceiver = antennaPos - centroid;
         float dist2 = dot(toReceiver, toReceiver);
         if (dist2 > maxRange2) continue;
 
@@ -556,8 +597,8 @@ void GNSSApp::findReflections(const float3& satDir, int prn, float elDeg, float 
 
         // Mirror the receiver about the triangle's plane
         // Plane: dot(x - v0, normal) = 0
-        float d = dot(mReceiverPos - tri.v0, tri.normal);
-        float3 mirrorPos = mReceiverPos - tri.normal * (2.0f * d);
+        float d = dot(antennaPos - tri.v0, tri.normal);
+        float3 mirrorPos = antennaPos - tri.normal * (2.0f * d);
 
         // Cast ray from mirror position in direction -satDir (incoming from satellite)
         // to find intersection with the triangle plane
@@ -590,8 +631,79 @@ void GNSSApp::findReflections(const float3& satDir, int prn, float elDeg, float 
 
         // Valid reflection point! Now verify paths are unobstructed
 
+        // Check if the reflected path (P → antenna) passes through the car body.
+        // Model car as an oriented bounding box aligned with car heading.
+        // Car body top is BELOW the antenna so the antenna sits above the blocking volume.
+        {
+            float carHalfWidth  = 1.0f;   // metres (Mach-E ~1.88m wide)
+            float carHalfLength = 2.4f;   // metres (Mach-E ~4.74m long)
+            float carBodyHeight = 1.5f;   // metres (Mach-E ~1.62m tall)
+            float carBottom = mReceiverPos.y;
+            float carTop = mReceiverPos.y + carBodyHeight;
+            // Ensure car body top is below antenna so antenna is outside the box
+            if (carTop >= antennaPos.y) carTop = antennaPos.y - 0.05f;
+            if (carTop <= carBottom) goto skipCarCheck;
+
+            // Transform P and antennaPos into car-local coordinates
+            // Car heading: mReceiverYaw rotates around Y axis
+            float cosY = cosf(mReceiverYaw);
+            float sinY = sinf(mReceiverYaw);
+
+            float rpx = P.x - mReceiverPos.x;
+            float rpz = P.z - mReceiverPos.z;
+            float3 lP = { rpx * cosY + rpz * sinY, P.y, -rpx * sinY + rpz * cosY };
+
+            float rax = antennaPos.x - mReceiverPos.x;
+            float raz = antennaPos.z - mReceiverPos.z;
+            float3 lA = { rax * cosY + raz * sinY, antennaPos.y, -rax * sinY + raz * cosY };
+
+            float3 lD = lA - lP; // direction in local space
+
+            // Slab-based ray-AABB intersection for segment t in [0, 1]
+            float tMin = 0.0f, tMax = 1.0f;
+
+            // X slab (car width)
+            if (fabsf(lD.x) > 1e-6f) {
+                float t1 = (-carHalfWidth  - lP.x) / lD.x;
+                float t2 = ( carHalfWidth  - lP.x) / lD.x;
+                if (t1 > t2) std::swap(t1, t2);
+                tMin = std::max(tMin, t1);
+                tMax = std::min(tMax, t2);
+            } else if (lP.x < -carHalfWidth || lP.x > carHalfWidth) {
+                goto skipCarCheck;
+            }
+
+            // Z slab (car length)
+            if (fabsf(lD.z) > 1e-6f) {
+                float t1 = (-carHalfLength - lP.z) / lD.z;
+                float t2 = ( carHalfLength - lP.z) / lD.z;
+                if (t1 > t2) std::swap(t1, t2);
+                tMin = std::max(tMin, t1);
+                tMax = std::min(tMax, t2);
+            } else if (lP.z < -carHalfLength || lP.z > carHalfLength) {
+                goto skipCarCheck;
+            }
+
+            // Y slab (car height)
+            if (fabsf(lD.y) > 1e-6f) {
+                float t1 = (carBottom - lP.y) / lD.y;
+                float t2 = (carTop   - lP.y) / lD.y;
+                if (t1 > t2) std::swap(t1, t2);
+                tMin = std::max(tMin, t1);
+                tMax = std::min(tMax, t2);
+            } else if (lP.y < carBottom || lP.y > carTop) {
+                goto skipCarCheck;
+            }
+
+            // If tMin <= tMax, the segment intersects the box
+            if (tMin <= tMax && tMax > 0.005f && tMin < 0.995f) {
+                continue; // blocked by car body
+            }
+        }
+        skipCarCheck:;
+
         // Path: reflection point → receiver
-        float3 toRec = mReceiverPos - P;
+        float3 toRec = antennaPos - P;
         float distToRec = length(toRec);
         if (distToRec < 0.01f) continue;
         float3 dirToRec = toRec / distToRec;
@@ -620,7 +732,7 @@ void GNSSApp::findReflections(const float3& satDir, int prn, float elDeg, float 
         result.reflEndpoint = P + satDir * mDomeRadius;
 
         // Extra path length: |P-R| - dot(P-R, satDir)
-        float3 v = P - mReceiverPos;
+        float3 v = P - antennaPos;
         result.extraPathM = length(v) - dot(v, satDir);
 
         mSignals.push_back(result);
@@ -704,16 +816,17 @@ void GNSSApp::updateSignalLines() {
     struct Segment { float3 a, b; };
     std::vector<Segment> losSegs, blockedSegs, reflectedSegs;
 
+    float3 antennaPos = mReceiverPos + float3{0, mAntennaRoofOffset, 0};
     for (const auto& sig : mSignals) {
         if (sig.type == SignalResult::LOS && mShowLOS) {
-            losSegs.push_back({mReceiverPos, mReceiverPos + sig.satDirection * mDomeRadius});
+            losSegs.push_back({antennaPos, antennaPos + sig.satDirection * mDomeRadius});
         }
         else if (sig.type == SignalResult::BLOCKED && mShowBlocked) {
-            blockedSegs.push_back({mReceiverPos, sig.hitPoint});
+            blockedSegs.push_back({antennaPos, sig.hitPoint});
         }
         else if (sig.type == SignalResult::REFLECTED && mShowReflected) {
             reflectedSegs.push_back({sig.reflEndpoint, sig.hitPoint});
-            reflectedSegs.push_back({sig.hitPoint, mReceiverPos});
+            reflectedSegs.push_back({sig.hitPoint, antennaPos});
         }
     }
 
@@ -852,11 +965,60 @@ bool GNSSApp::loadKML(const std::string& path) {
         return false;
     }
 
-    // Compute cumulative distances
+    // Step 1: Compute cumulative distances on raw points
     mTrajectory[0].cumDist = 0;
     for (size_t i = 1; i < mTrajectory.size(); i++) {
         float3 delta = mTrajectory[i].modelPos - mTrajectory[i-1].modelPos;
-        delta.y = 0; // horizontal distance only
+        delta.y = 0;
+        mTrajectory[i].cumDist = mTrajectory[i-1].cumDist + length(delta);
+    }
+    float rawTotalDist = mTrajectory.back().cumDist;
+
+    // Step 2: Linearly resample at uniform 1m intervals
+    {
+        auto raw = mTrajectory;
+        mTrajectory.clear();
+        float step = 1.0f;
+        int numPts = std::max(2, (int)(rawTotalDist / step) + 1);
+        size_t seg = 1;
+
+        for (int p = 0; p < numPts; p++) {
+            float d = (p == numPts - 1) ? rawTotalDist : p * step;
+
+            while (seg < raw.size() - 1 && raw[seg].cumDist < d) seg++;
+
+            float segLen = raw[seg].cumDist - raw[seg-1].cumDist;
+            float t = (segLen > 0.001f) ? (d - raw[seg-1].cumDist) / segLen : 0.0f;
+            t = std::clamp(t, 0.0f, 1.0f);
+
+            TrajectoryPoint pt;
+            pt.modelPos.x = raw[seg-1].modelPos.x + t * (raw[seg].modelPos.x - raw[seg-1].modelPos.x);
+            pt.modelPos.z = raw[seg-1].modelPos.z + t * (raw[seg].modelPos.z - raw[seg-1].modelPos.z);
+            pt.modelPos.y = 0;
+            pt.lat = raw[seg-1].lat + t * (raw[seg].lat - raw[seg-1].lat);
+            pt.lon = raw[seg-1].lon + t * (raw[seg].lon - raw[seg-1].lon);
+            pt.cumDist = 0;
+            mTrajectory.push_back(pt);
+        }
+    }
+
+    // Step 3: Gaussian smoothing passes on XZ and lat/lon (preserve endpoints)
+    for (int pass = 0; pass < 20; pass++) {
+        auto prev = mTrajectory;
+        for (size_t i = 2; i + 2 < mTrajectory.size(); i++) {
+            // 5-point Gaussian kernel [1, 4, 6, 4, 1] / 16
+            mTrajectory[i].modelPos.x = (prev[i-2].modelPos.x + 4*prev[i-1].modelPos.x + 6*prev[i].modelPos.x + 4*prev[i+1].modelPos.x + prev[i+2].modelPos.x) / 16.0f;
+            mTrajectory[i].modelPos.z = (prev[i-2].modelPos.z + 4*prev[i-1].modelPos.z + 6*prev[i].modelPos.z + 4*prev[i+1].modelPos.z + prev[i+2].modelPos.z) / 16.0f;
+            mTrajectory[i].lat = (prev[i-2].lat + 4*prev[i-1].lat + 6*prev[i].lat + 4*prev[i+1].lat + prev[i+2].lat) / 16.0;
+            mTrajectory[i].lon = (prev[i-2].lon + 4*prev[i-1].lon + 6*prev[i].lon + 4*prev[i+1].lon + prev[i+2].lon) / 16.0;
+        }
+    }
+
+    // Step 4: Recompute cumulative distances on smoothed points
+    mTrajectory[0].cumDist = 0;
+    for (size_t i = 1; i < mTrajectory.size(); i++) {
+        float3 delta = mTrajectory[i].modelPos - mTrajectory[i-1].modelPos;
+        delta.y = 0;
         mTrajectory[i].cumDist = mTrajectory[i-1].cumDist + length(delta);
     }
     mTrajectoryTotalDist = mTrajectory.back().cumDist;
@@ -992,6 +1154,7 @@ void GNSSApp::saveSettings() {
     f << "receiverLon=" << std::fixed << mReceiverLon << "\n";
     f << "receiverAlt=" << mGroundElevation << "\n";
     f << "receiverHeight=" << mAntennaHeight << "\n";
+    f << "antennaRoofOffset=" << mAntennaRoofOffset << "\n";
     f << "year=" << mYear << "\n";
     f << "month=" << mMonth << "\n";
     f << "day=" << mDay << "\n";
@@ -1002,6 +1165,8 @@ void GNSSApp::saveSettings() {
     f << "domeRadius=" << mDomeRadius << "\n";
     f << "maxReflectionRange=" << mMaxReflectionRange << "\n";
     f << "moveSpeed=" << mMoveSpeed << "\n";
+    f << "carModelPath=" << mCarModelPath << "\n";
+    f << "carScale=" << mCarScale << "\n";
     f << "lineWidth=" << mLineWidth << "\n";
     f << "kmlPath=" << mKmlPath << "\n";
     f << "modelOriginLat=" << std::fixed << mModelOriginLat << "\n";
@@ -1012,6 +1177,8 @@ void GNSSApp::saveSettings() {
     f << "showLOS=" << (mShowLOS ? 1 : 0) << "\n";
     f << "showBlocked=" << (mShowBlocked ? 1 : 0) << "\n";
     f << "showReflected=" << (mShowReflected ? 1 : 0) << "\n";
+    f << "showTrajectory=" << (mShowTrajectory ? 1 : 0) << "\n";
+    f << "iblIntensity=" << mIBLIntensity << "\n";
     std::cout << "Settings saved" << std::endl;
 }
 
@@ -1031,6 +1198,7 @@ void GNSSApp::loadSettings() {
             else if (key == "receiverLon") mReceiverLon = std::stod(val);
             else if (key == "receiverAlt") mGroundElevation = std::stod(val);
             else if (key == "receiverHeight") mAntennaHeight = std::stof(val);
+            else if (key == "antennaRoofOffset") mAntennaRoofOffset = std::stof(val);
             else if (key == "year") mYear = std::stoi(val);
             else if (key == "month") mMonth = std::stoi(val);
             else if (key == "day") mDay = std::stoi(val);
@@ -1041,6 +1209,8 @@ void GNSSApp::loadSettings() {
             else if (key == "domeRadius") mDomeRadius = std::stof(val);
             else if (key == "maxReflectionRange") mMaxReflectionRange = std::stof(val);
             else if (key == "moveSpeed") mMoveSpeed = std::stof(val);
+            else if (key == "carModelPath") strncpy(mCarModelPath, val.c_str(), sizeof(mCarModelPath) - 1);
+            else if (key == "carScale") mCarScale = std::stof(val);
             else if (key == "lineWidth") mLineWidth = std::stof(val);
             else if (key == "kmlPath") strncpy(mKmlPath, val.c_str(), sizeof(mKmlPath) - 1);
             else if (key == "modelOriginLat") mModelOriginLat = std::stod(val);
@@ -1051,6 +1221,8 @@ void GNSSApp::loadSettings() {
             else if (key == "showLOS") mShowLOS = (val == "1");
             else if (key == "showBlocked") mShowBlocked = (val == "1");
             else if (key == "showReflected") mShowReflected = (val == "1");
+            else if (key == "showTrajectory") mShowTrajectory = (val == "1");
+            else if (key == "iblIntensity") mIBLIntensity = std::stof(val);
         } catch (...) {}
     }
 }
@@ -1200,7 +1372,15 @@ void GNSSApp::buildImGuiPanel() {
                 mAntennaHeight = (float)h;
                 changed = true;
             }
-            ImGui::SetItemTooltip("Height of antenna in the 3D scene. Use A/Z keys to move up/down.");
+            ImGui::SetItemTooltip("Car base height above ground. Use A/Z keys to move up/down.");
+        }
+        {
+            double r = (double)mAntennaRoofOffset;
+            if (ImGui::InputDouble("Antenna Offset (m)", &r, 0.1, 1.0, "%.1f")) {
+                mAntennaRoofOffset = (float)r;
+                changed = true;
+            }
+            ImGui::SetItemTooltip("Height of antenna above car base (roof).");
         }
         changed |= ImGui::InputDouble("Ground Elevation (m)", &mGroundElevation, 1.0, 10.0, "%.1f");
         ImGui::SetItemTooltip("Ground height above WGS-84 ellipsoid (has negligible effect on satellite positions)");
@@ -1210,6 +1390,24 @@ void GNSSApp::buildImGuiPanel() {
         ImGui::SliderFloat("Move Speed (m)", &mMoveSpeed, 0.5f, 50.0f);
         ImGui::Text("Arrow keys: move horizontally");
         ImGui::Text("A/Z: move up/down");
+
+        ImGui::Separator();
+        ImGui::InputText("##car", mCarModelPath, sizeof(mCarModelPath));
+        ImGui::SameLine();
+        if (ImGui::Button("Browse##car")) {
+#ifdef _WIN32
+            std::string f = openFileDialogGNSS(NULL, "Open Car Model",
+                "GLB Files (*.glb)\0*.glb\0All Files\0*.*\0", "glb");
+            if (!f.empty()) {
+                strncpy(mCarModelPath, f.c_str(), sizeof(mCarModelPath) - 1);
+                loadCarModel(mCarModelPath);
+            }
+#endif
+        }
+        if (ImGui::Button("Load Car Model") && mCarModelPath[0]) {
+            loadCarModel(mCarModelPath);
+        }
+        ImGui::SliderFloat("Car Scale", &mCarScale, 0.1f, 20.0f, "%.1f");
 
         if (changed) mNeedsRecompute = true;
     }
@@ -1313,6 +1511,12 @@ void GNSSApp::buildImGuiPanel() {
                         float t = segLen > 0 ? (mPlaybackDist - mTrajectory[i-1].cumDist) / segLen : 0;
                         mReceiverPos = mTrajectory[i-1].modelPos + (mTrajectory[i].modelPos - mTrajectory[i-1].modelPos) * t;
                         mReceiverPos.y = mAntennaHeight + mModelOriginHeight;
+                        // Update heading from segment direction
+                        float dx = mTrajectory[i].modelPos.x - mTrajectory[i-1].modelPos.x;
+                        float dz = mTrajectory[i].modelPos.z - mTrajectory[i-1].modelPos.z;
+                        if (dx * dx + dz * dz > 0.001f) {
+                            mReceiverYaw = atan2f(dx, dz);
+                        }
                         break;
                     }
                 }
@@ -1361,8 +1565,19 @@ void GNSSApp::buildImGuiPanel() {
         changed |= ImGui::Checkbox("Show LOS (green)", &mShowLOS);
         changed |= ImGui::Checkbox("Show Blocked (red)", &mShowBlocked);
         changed |= ImGui::Checkbox("Show Reflected (orange)", &mShowReflected);
+        if (ImGui::Checkbox("Show Trajectory", &mShowTrajectory)) {
+            if (mShowTrajectory && mTrajectoryLoaded) buildTrajectoryLine();
+            else destroyTrajectoryLine();
+        }
         changed |= ImGui::SliderFloat("Line Width (m)", &mLineWidth, 0.1f, 10.0f, "%.1f");
         if (changed) updateSignalLines();
+
+        // IBL intensity control
+        if (ImGui::SliderFloat("IBL Intensity", &mIBLIntensity, 0.0f, 200000.0f, "%.0f")) {
+            if (mIndirectLight) {
+                mIndirectLight->setIntensity(mIBLIntensity);
+            }
+        }
     }
 
     // --- Statistics ---
@@ -1377,12 +1592,12 @@ void GNSSApp::buildImGuiPanel() {
         ImGui::Separator();
         // Satellite table
         if (ImGui::BeginTable("sats", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                              ImGuiTableFlags_ScrollY, ImVec2(0, 300))) {
-            ImGui::TableSetupColumn("PRN", ImGuiTableColumnFlags_WidthFixed, 40);
+                              ImGuiTableFlags_ScrollY, ImVec2(0, 700))) {
+            ImGui::TableSetupColumn("PRN", ImGuiTableColumnFlags_WidthFixed, 50);
             ImGui::TableSetupColumn("Az", ImGuiTableColumnFlags_WidthFixed, 50);
             ImGui::TableSetupColumn("El", ImGuiTableColumnFlags_WidthFixed, 50);
-            ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Delay", ImGuiTableColumnFlags_WidthFixed, 60);
+            ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 90);
+            ImGui::TableSetupColumn("Delay", ImGuiTableColumnFlags_WidthFixed, 80);
             ImGui::TableHeadersRow();
 
             for (const auto& sig : mSignals) {
@@ -1420,6 +1635,8 @@ void GNSSApp::buildImGuiPanel() {
     if (ImGui::Button("Save Settings")) saveSettings();
     ImGui::SameLine();
     if (ImGui::Button("Load Settings")) { loadSettings(); mNeedsRecompute = true; }
+    ImGui::SameLine();
+    if (ImGui::Button("Quit")) mRunning = false;
 
     ImGui::End();
 }
@@ -1528,7 +1745,16 @@ void GNSSApp::run() {
                 if (key == SDLK_DOWN)  { mReceiverPos.x += mMoveSpeed * sinYaw; mReceiverPos.z += mMoveSpeed * cosYaw; moved = true; }
                 if (key == SDLK_a)     { mAntennaHeight += mMoveSpeed; moved = true; }
                 if (key == SDLK_z)     { mAntennaHeight -= mMoveSpeed; moved = true; }
-                if (key == SDLK_ESCAPE) mRunning = false;
+                if (key == SDLK_SPACE) {
+                    if (mPlaying) mPlaybackPaused = !mPlaybackPaused;
+                    else if (mTrajectoryLoaded) {
+                        mPlaying = true;
+                        mPlaybackPaused = false;
+                        mLastPlaybackTime = 0;
+                        if (mPlaybackDist >= mTrajectoryTotalDist) mPlaybackDist = 0;
+                    }
+                }
+                if (key == SDLK_ESCAPE || key == SDLK_q) mRunning = false;
                 if (key == SDLK_TAB) {
                     // Toggle sidebar
                     if (SDL_GetWindowFlags(mControlWindow) & SDL_WINDOW_SHOWN)
@@ -1557,33 +1783,57 @@ void GNSSApp::run() {
                     mPlaying = false;
                 }
 
-                // Interpolate position along trajectory
+                // Interpolate position along smoothed trajectory (linear — points are 1m apart)
                 for (size_t i = 1; i < mTrajectory.size(); ++i) {
                     if (mPlaybackDist <= mTrajectory[i].cumDist || i == mTrajectory.size() - 1) {
                         float segLen = mTrajectory[i].cumDist - mTrajectory[i-1].cumDist;
                         float t = (segLen > 0.001f) ? (mPlaybackDist - mTrajectory[i-1].cumDist) / segLen : 0.0f;
                         t = std::clamp(t, 0.0f, 1.0f);
-                        float3 p0 = mTrajectory[i-1].modelPos;
-                        float3 p1 = mTrajectory[i].modelPos;
-                        mReceiverPos.x = p0.x + t * (p1.x - p0.x);
-                        mReceiverPos.z = p0.z + t * (p1.z - p0.z);
-                        mReceiverPos.y = mAntennaHeight;
 
-                        // Interpolate lat/lon for satellite computation
+                        mReceiverPos.x = mTrajectory[i-1].modelPos.x + t * (mTrajectory[i].modelPos.x - mTrajectory[i-1].modelPos.x);
+                        mReceiverPos.z = mTrajectory[i-1].modelPos.z + t * (mTrajectory[i].modelPos.z - mTrajectory[i-1].modelPos.z);
+                        mReceiverPos.y = mAntennaHeight + mModelOriginHeight;
+
+                        // Heading from wide lookahead/lookback window (±5m) for smooth turns
+                        size_t lookBack = (i > 5) ? i - 5 : 0;
+                        size_t lookAhead = (i + 5 < mTrajectory.size()) ? i + 5 : mTrajectory.size() - 1;
+                        float hdx = mTrajectory[lookAhead].modelPos.x - mTrajectory[lookBack].modelPos.x;
+                        float hdz = mTrajectory[lookAhead].modelPos.z - mTrajectory[lookBack].modelPos.z;
+                        if (hdx * hdx + hdz * hdz > 0.001f) {
+                            float targetYaw = atan2f(hdx, hdz);
+                            float diff = targetYaw - mReceiverYaw;
+                            while (diff > (float)M_PI)  diff -= 2.0f * (float)M_PI;
+                            while (diff < -(float)M_PI) diff += 2.0f * (float)M_PI;
+                            mReceiverYaw += diff * std::min(1.0f, 8.0f * (float)dt);
+                        }
+
                         mReceiverLat = mTrajectory[i-1].lat + t * (mTrajectory[i].lat - mTrajectory[i-1].lat);
                         mReceiverLon = mTrajectory[i-1].lon + t * (mTrajectory[i].lon - mTrajectory[i-1].lon);
                         break;
                     }
                 }
 
-                // Follow camera
+                // Follow camera — position behind the car
                 if (mFollowCamera) {
                     mCameraTarget = mReceiverPos;
+                    // Align camera yaw to look in the car's direction of travel
+                    // mReceiverYaw is the car's heading; camera should be behind it
+                    mCameraYaw = mReceiverYaw + (float)M_PI;
                 }
 
                 mNeedsRecompute = true;
             }
             mLastPlaybackTime = now;
+        }
+
+        // --- Ground clamp: raycast down to find ground surface ---
+        if (mMeshLoaded) {
+            float3 rayOrigin = {mReceiverPos.x, 500.0f, mReceiverPos.z};
+            float3 rayDir = {0, -1, 0};
+            auto hit = mBVH.trace(rayOrigin, rayDir, 1000.0f);
+            if (hit.hit) {
+                mReceiverPos.y = hit.point.y + mAntennaHeight;
+            }
         }
 
         // --- Recompute signals if needed ---
@@ -1597,12 +1847,15 @@ void GNSSApp::run() {
             mNeedsRecompute = false;
         }
 
-        // --- Update receiver marker transform ---
-        {
+        // --- Update car model transform ---
+        if (mCarAsset) {
             auto& tcm = mEngine->getTransformManager();
-            auto ti = tcm.getInstance(mReceiverEntity);
+            auto ti = tcm.getInstance(mCarAsset->getRoot());
             if (ti) {
-                tcm.setTransform(ti, mat4f::translation(mReceiverPos));
+                mat4f T = mat4f::translation(mReceiverPos);
+                mat4f R = mat4f::rotation(mReceiverYaw, float3{0, 1, 0});
+                mat4f S = mat4f::scaling(float3{mCarScale, mCarScale, mCarScale});
+                tcm.setTransform(ti, T * R * S);
             }
         }
 
