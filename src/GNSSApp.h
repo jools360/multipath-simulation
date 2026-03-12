@@ -26,8 +26,17 @@
 #include <gltfio/MaterialProvider.h>
 #include <gltfio/TextureProvider.h>
 
+#include <filament/RenderTarget.h>
+#include <filament/Texture.h>
+#include <backend/PixelBufferDescriptor.h>
+
 #include <string>
 #include <vector>
+#include <queue>
+#include <mutex>
+#include <thread>
+#include <atomic>
+#include <chrono>
 
 using namespace filament;
 using namespace filament::math;
@@ -67,6 +76,8 @@ private:
     void updateSidebarLayout();
     void saveSettings();
     void loadSettings();
+    void startRecording();
+    void stopRecording();
 
     // Trajectory
     bool loadKML(const std::string& path);
@@ -199,13 +210,39 @@ private:
     bool mPanning = false;
     int mLastMouseX = 0, mLastMouseY = 0;
 
-    // ImGui sidebar
+    // ImGui sidebar (overlay on main window)
     SDL_Window* mControlWindow = nullptr;
     SDL_GLContext mGLContext = nullptr;
     Uint32 mMainWindowID = 0;
     Uint32 mControlWindowID = 0;
     int mSidebarWidth = 400;
+    bool mSidebarVisible = true;
     bool mRunning = true;
+
+    // Video recording (double-buffered offscreen RT → FFmpeg pipe)
+    bool mRecording = false;
+    Texture* mRecordColor[2] = {};
+    Texture* mRecordDepth[2] = {};
+    RenderTarget* mRecordRT[2] = {};
+    View* mRecordView = nullptr;
+    int mRecordFrameIndex = 0;
+    int mRecordWidth = 0;
+    int mRecordHeight = 0;
+    FILE* mRecordPipe = nullptr;
+    std::thread mRecordThread;
+    std::mutex mRecordMutex;
+    std::condition_variable mRecordCV;
+    std::queue<uint8_t*> mRecordQueue;
+    std::atomic<bool> mRecordThreadRunning{false};
+    int mRecordFrameCount = 0;
+    std::chrono::steady_clock::time_point mRecordStartTime;
+    std::chrono::steady_clock::time_point mRecordNextCapture;
+    int mRecordFps = 30;
+
+    // Sidebar capture for compositing into recording
+    std::vector<uint8_t> mSidebarCapture;
+    int mSidebarCaptureW = 0, mSidebarCaptureH = 0;
+    std::mutex mSidebarCaptureMutex;
 
     // File paths
     char mAlmanacPath[512] = "";

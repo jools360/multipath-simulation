@@ -25,6 +25,12 @@
 #include <algorithm>
 #include <filesystem>
 #include <sstream>
+#include <chrono>
+
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -56,6 +62,8 @@ static std::string openFileDialogGNSS(HWND owner, const char* title, const char*
 GNSSApp::GNSSApp() = default;
 
 GNSSApp::~GNSSApp() {
+    stopRecording();
+
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL2_Shutdown();
     ImGui::DestroyContext();
@@ -139,19 +147,10 @@ bool GNSSApp::init() {
         return false;
     }
 
-    {
-        SDL_Rect bounds = {};
-        SDL_GetDisplayUsableBounds(0, &bounds);
-        int sidebarW = 500;
-        // Available width for the main window (right of sidebar)
-        int availW = bounds.w - sidebarW;
-        int winW = std::min(mWinWidth, availW);
-        int winX = bounds.x + sidebarW + (availW - winW) / 2;
-        int winY = bounds.y + (bounds.h - mWinHeight) / 2;
-        mWindow = SDL_CreateWindow("GNSS Multipath Simulation",
-            winX, winY, winW, mWinHeight,
-            SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
-    }
+    mWindow = SDL_CreateWindow("GNSS Multipath Simulation",
+        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+        mWinWidth, mWinHeight,
+        SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
     if (!mWindow) return false;
 
     void* nativeWindow = nullptr;
@@ -255,10 +254,11 @@ bool GNSSApp::init() {
     }
     mSidebarWidth = (int)(450 * dpiScale);
 
-    int mainX, mainY;
+    int mainX, mainY, mainW, mainH;
     SDL_GetWindowPosition(mWindow, &mainX, &mainY);
+    SDL_GetWindowSize(mWindow, &mainW, &mainH);
     mControlWindow = SDL_CreateWindow("GNSS Controls",
-        mainX, mainY, mSidebarWidth, mWinHeight,
+        mainX, mainY, mSidebarWidth, mainH,
         SDL_WINDOW_OPENGL | SDL_WINDOW_BORDERLESS | SDL_WINDOW_ALLOW_HIGHDPI);
     if (!mControlWindow) return false;
 
@@ -1122,16 +1122,18 @@ void GNSSApp::buildTrajectoryLine() {
 }
 
 void GNSSApp::updateSidebarLayout() {
-    int mainX, mainY;
-    SDL_GetWindowPosition(mWindow, &mainX, &mainY);
-    int di = SDL_GetWindowDisplayIndex(mWindow);
-    SDL_Rect bounds;
-    int sidebarHeight = mWinHeight;
-    if (SDL_GetDisplayUsableBounds(di, &bounds) == 0) {
-        sidebarHeight = bounds.h;
+    if (!mControlWindow) return;
+    if (mSidebarVisible) {
+        int mainX, mainY, mainW, mainH;
+        SDL_GetWindowPosition(mWindow, &mainX, &mainY);
+        SDL_GetWindowSize(mWindow, &mainW, &mainH);
+        SDL_SetWindowPosition(mControlWindow, mainX, mainY);
+        SDL_SetWindowSize(mControlWindow, mSidebarWidth, mainH);
+        SDL_ShowWindow(mControlWindow);
+        SDL_RaiseWindow(mControlWindow);
+    } else {
+        SDL_HideWindow(mControlWindow);
     }
-    SDL_SetWindowPosition(mControlWindow, mainX - mSidebarWidth, bounds.y);
-    SDL_SetWindowSize(mControlWindow, mSidebarWidth, sidebarHeight);
 }
 
 static std::string getSettingsPathGNSS() {
@@ -1224,6 +1226,138 @@ void GNSSApp::loadSettings() {
             else if (key == "showTrajectory") mShowTrajectory = (val == "1");
             else if (key == "iblIntensity") mIBLIntensity = std::stof(val);
         } catch (...) {}
+    }
+}
+
+void GNSSApp::startRecording() {
+    if (mRecording) return;
+
+    // Find FFmpeg
+    char exePath[MAX_PATH];
+    GetModuleFileNameA(NULL, exePath, MAX_PATH);
+    std::string exeDir(exePath);
+    size_t lastSlash = exeDir.find_last_of("\\/");
+    std::string ffmpegLocal = (lastSlash != std::string::npos)
+        ? exeDir.substr(0, lastSlash + 1) + "ffmpeg.exe" : "ffmpeg.exe";
+    std::string ffmpegPath;
+    if (GetFileAttributesA(ffmpegLocal.c_str()) != INVALID_FILE_ATTRIBUTES)
+        ffmpegPath = ffmpegLocal;
+    else
+        ffmpegPath = "ffmpeg";
+
+    SDL_GetWindowSize(mWindow, &mRecordWidth, &mRecordHeight);
+    std::string outputPath = (lastSlash != std::string::npos)
+        ? exeDir.substr(0, lastSlash + 1) + "recording.mp4" : "recording.mp4";
+    std::string sizeStr = std::to_string(mRecordWidth) + "x" + std::to_string(mRecordHeight);
+
+    std::string innerCmd =
+        "\"" + ffmpegPath + "\" -y -hide_banner -loglevel error "
+        "-f rawvideo -pix_fmt rgba -s " + sizeStr + " -r " + std::to_string(mRecordFps) + " "
+        "-i pipe:0 "
+        "-c:v hevc_nvenc -preset p7 -tune hq -rc vbr -cq 18 -b:v 0 "
+        "-pix_fmt yuv420p \"" + outputPath + "\"";
+    std::string cmd = "\"" + innerCmd + "\"";
+
+    mRecordPipe = _popen(cmd.c_str(), "w");
+    if (!mRecordPipe) {
+        std::cerr << "Failed to launch FFmpeg for recording" << std::endl;
+        return;
+    }
+    _setmode(_fileno(mRecordPipe), _O_BINARY);
+
+    // Create double-buffered offscreen RenderTargets
+    for (int i = 0; i < 2; i++) {
+        mRecordColor[i] = Texture::Builder()
+            .width(mRecordWidth).height(mRecordHeight).levels(1)
+            .format(Texture::InternalFormat::RGBA8)
+            .usage(Texture::Usage::COLOR_ATTACHMENT | Texture::Usage::BLIT_SRC)
+            .build(*mEngine);
+        mRecordDepth[i] = Texture::Builder()
+            .width(mRecordWidth).height(mRecordHeight).levels(1)
+            .format(Texture::InternalFormat::DEPTH24)
+            .usage(Texture::Usage::DEPTH_ATTACHMENT)
+            .build(*mEngine);
+        mRecordRT[i] = RenderTarget::Builder()
+            .texture(RenderTarget::AttachmentPoint::COLOR, mRecordColor[i])
+            .texture(RenderTarget::AttachmentPoint::DEPTH, mRecordDepth[i])
+            .build(*mEngine);
+    }
+
+    // Offscreen view matching the main view
+    mRecordView = mEngine->createView();
+    mRecordView->setScene(mScene);
+    mRecordView->setCamera(mCamera);
+    mRecordView->setViewport({0, 0, (uint32_t)mRecordWidth, (uint32_t)mRecordHeight});
+    mRecordView->setPostProcessingEnabled(true);
+    mRecordView->setShadowingEnabled(true);
+
+    mRecordFrameIndex = 0;
+    mRecordFrameCount = 0;
+    mRecordStartTime = std::chrono::steady_clock::now();
+    mRecordNextCapture = mRecordStartTime;
+
+    mRecordThreadRunning = true;
+    mRecordThread = std::thread([this]() {
+        const size_t frameSize = (size_t)mRecordWidth * mRecordHeight * 4;
+        while (true) {
+            uint8_t* buf = nullptr;
+            {
+                std::unique_lock<std::mutex> lock(mRecordMutex);
+                mRecordCV.wait(lock, [this]() {
+                    return !mRecordQueue.empty() || !mRecordThreadRunning;
+                });
+                if (!mRecordThreadRunning && mRecordQueue.empty()) break;
+                buf = mRecordQueue.front();
+                mRecordQueue.pop();
+            }
+            // Composite sidebar pixels onto the frame
+            {
+                std::lock_guard<std::mutex> lock(mSidebarCaptureMutex);
+                if (!mSidebarCapture.empty() && mSidebarCaptureW > 0 && mSidebarCaptureH > 0) {
+                    int sbW = mSidebarCaptureW;
+                    int sbH = mSidebarCaptureH;
+                    int fW = mRecordWidth;
+                    int fH = mRecordHeight;
+                    int copyW = std::min(sbW, fW);
+                    int copyH = std::min(sbH, fH);
+                    for (int y = 0; y < copyH; y++) {
+                        // GL readPixels is bottom-up, Vulkan readPixels is top-down
+                        int srcRow = sbH - 1 - y;
+                        memcpy(buf + y * fW * 4,
+                               mSidebarCapture.data() + srcRow * sbW * 4,
+                               copyW * 4);
+                    }
+                }
+            }
+            fwrite(buf, 1, frameSize, mRecordPipe);
+            mRecordFrameCount++;
+            delete[] buf;
+        }
+    });
+
+    mRecording = true;
+    std::cout << "Recording started: " << mRecordWidth << "x" << mRecordHeight
+              << " @ " << mRecordFps << "fps → " << outputPath << std::endl;
+}
+
+void GNSSApp::stopRecording() {
+    if (!mRecording) return;
+    mRecording = false;
+    mRecordThreadRunning = false;
+    mRecordCV.notify_one();
+    if (mRecordThread.joinable()) mRecordThread.join();
+    if (mRecordPipe) { _pclose(mRecordPipe); mRecordPipe = nullptr; }
+
+    auto elapsed = std::chrono::steady_clock::now() - mRecordStartTime;
+    double secs = std::chrono::duration<double>(elapsed).count();
+    std::cout << "Recording stopped: " << mRecordFrameCount << " frames in "
+              << secs << "s = " << (mRecordFrameCount / secs) << " fps" << std::endl;
+
+    if (mRecordView) { mEngine->destroy(mRecordView); mRecordView = nullptr; }
+    for (int i = 0; i < 2; i++) {
+        if (mRecordRT[i]) { mEngine->destroy(mRecordRT[i]); mRecordRT[i] = nullptr; }
+        if (mRecordColor[i]) { mEngine->destroy(mRecordColor[i]); mRecordColor[i] = nullptr; }
+        if (mRecordDepth[i]) { mEngine->destroy(mRecordDepth[i]); mRecordDepth[i] = nullptr; }
     }
 }
 
@@ -1630,6 +1764,15 @@ void GNSSApp::buildImGuiPanel() {
         drawSkyPlot();
     }
 
+    // --- Recording ---
+    ImGui::Separator();
+    if (mRecording) {
+        ImGui::TextColored(ImVec4(1, 0.2f, 0.2f, 1), "REC  %d frames", mRecordFrameCount);
+        if (ImGui::Button("Stop Recording (F5)")) stopRecording();
+    } else {
+        if (ImGui::Button("Record Video (F5)")) startRecording();
+    }
+
     // --- Save/Load ---
     ImGui::Separator();
     if (ImGui::Button("Save Settings")) saveSettings();
@@ -1646,6 +1789,13 @@ void GNSSApp::run() {
         // --- Event handling ---
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
+            // Intercept Tab before ImGui — toggle sidebar from any window
+            if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_TAB) {
+                mSidebarVisible = !mSidebarVisible;
+                updateSidebarLayout();
+                continue;
+            }
+
             // Route to ImGui if for sidebar
             if (event.type == SDL_WINDOWEVENT || event.type == SDL_MOUSEMOTION ||
                 event.type == SDL_MOUSEBUTTONDOWN || event.type == SDL_MOUSEBUTTONUP ||
@@ -1674,16 +1824,16 @@ void GNSSApp::run() {
                 if (event.window.event == SDL_WINDOWEVENT_CLOSE) {
                     mRunning = false;
                 }
-                else if (event.window.event == SDL_WINDOWEVENT_RESIZED &&
+                else if ((event.window.event == SDL_WINDOWEVENT_MOVED ||
+                          event.window.event == SDL_WINDOWEVENT_RESIZED) &&
                          event.window.windowID == mMainWindowID) {
-                    mWinWidth = event.window.data1;
-                    mWinHeight = event.window.data2;
-                    mView->setViewport({0, 0, (uint32_t)mWinWidth, (uint32_t)mWinHeight});
-                    float aspect = (float)mWinWidth / (float)mWinHeight;
-                    mCamera->setProjection(60.0f, aspect, 0.5f, 5000.0f);
-                }
-                else if (event.window.event == SDL_WINDOWEVENT_MOVED &&
-                         event.window.windowID == mMainWindowID) {
+                    if (event.window.event == SDL_WINDOWEVENT_RESIZED) {
+                        mWinWidth = event.window.data1;
+                        mWinHeight = event.window.data2;
+                        mView->setViewport({0, 0, (uint32_t)mWinWidth, (uint32_t)mWinHeight});
+                        float aspect = (float)mWinWidth / (float)mWinHeight;
+                        mCamera->setProjection(60.0f, aspect, 0.5f, 5000.0f);
+                    }
                     updateSidebarLayout();
                 }
             }
@@ -1755,12 +1905,9 @@ void GNSSApp::run() {
                     }
                 }
                 if (key == SDLK_ESCAPE || key == SDLK_q) mRunning = false;
-                if (key == SDLK_TAB) {
-                    // Toggle sidebar
-                    if (SDL_GetWindowFlags(mControlWindow) & SDL_WINDOW_SHOWN)
-                        SDL_HideWindow(mControlWindow);
-                    else
-                        SDL_ShowWindow(mControlWindow);
+                if (key == SDLK_F5) {
+                    if (mRecording) stopRecording();
+                    else startRecording();
                 }
 
                 if (moved) {
@@ -1868,26 +2015,77 @@ void GNSSApp::run() {
             mCamera->lookAt(eye, mCameraTarget, {0, 1, 0});
         }
 
+        // --- Offscreen render for recording ---
+        if (mRecording && mRecordRT[0] && mRecordView) {
+            int cur = mRecordFrameIndex & 1;
+            mRecordView->setRenderTarget(mRecordRT[cur]);
+            mRenderer->renderStandaloneView(mRecordView);
+        }
+
         // --- Render 3D scene ---
         if (mRenderer->beginFrame(mSwapChain)) {
             mRenderer->render(mView);
+
+            // Read from PREVIOUS frame's offscreen RT
+            if (mRecording && mRecordFrameIndex > 0) {
+                auto now = std::chrono::steady_clock::now();
+                if (now >= mRecordNextCapture) {
+                    int prev = 1 - (mRecordFrameIndex & 1);
+                    size_t bufSize = (size_t)mRecordWidth * mRecordHeight * 4;
+                    uint8_t* buf = new uint8_t[bufSize];
+                    auto pbd = backend::PixelBufferDescriptor::make(
+                        buf, bufSize,
+                        backend::PixelBufferDescriptor::PixelDataFormat::RGBA,
+                        backend::PixelBufferDescriptor::PixelDataType::UBYTE,
+                        [this](void* buffer, size_t) {
+                            std::lock_guard<std::mutex> lock(mRecordMutex);
+                            mRecordQueue.push(static_cast<uint8_t*>(buffer));
+                            mRecordCV.notify_one();
+                        });
+                    mRenderer->readPixels(mRecordRT[prev],
+                        0, 0, mRecordWidth, mRecordHeight, std::move(pbd));
+                    auto interval = std::chrono::microseconds(1000000 / mRecordFps);
+                    mRecordNextCapture += interval;
+                    if (mRecordNextCapture < now) mRecordNextCapture = now + interval;
+                }
+            }
+
             mRenderer->endFrame();
+            if (mRecording) mRecordFrameIndex++;
         }
 
         // --- Render ImGui sidebar ---
-        SDL_GL_MakeCurrent(mControlWindow, mGLContext);
-        ImGui_ImplOpenGL3_NewFrame();
-        ImGui_ImplSDL2_NewFrame();
-        ImGui::NewFrame();
-        buildImGuiPanel();
-        ImGui::Render();
+        if (mSidebarVisible) {
+            SDL_GL_MakeCurrent(mControlWindow, mGLContext);
+            ImGui_ImplOpenGL3_NewFrame();
+            ImGui_ImplSDL2_NewFrame();
+            ImGui::NewFrame();
+            buildImGuiPanel();
+            ImGui::Render();
 
-        int fbW, fbH;
-        SDL_GL_GetDrawableSize(mControlWindow, &fbW, &fbH);
-        glViewport(0, 0, fbW, fbH);
-        glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-        SDL_GL_SwapWindow(mControlWindow);
+            int fbW, fbH;
+            SDL_GL_GetDrawableSize(mControlWindow, &fbW, &fbH);
+            glViewport(0, 0, fbW, fbH);
+            glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+            // Capture sidebar pixels for recording compositing (before swap)
+            if (mRecording) {
+                std::vector<uint8_t> pixels(fbW * fbH * 4);
+                glReadPixels(0, 0, fbW, fbH, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+                std::lock_guard<std::mutex> lock(mSidebarCaptureMutex);
+                mSidebarCapture = std::move(pixels);
+                mSidebarCaptureW = fbW;
+                mSidebarCaptureH = fbH;
+            }
+
+            SDL_GL_SwapWindow(mControlWindow);
+        } else if (mRecording) {
+            // Sidebar hidden — clear the capture so it's not composited
+            std::lock_guard<std::mutex> lock(mSidebarCaptureMutex);
+            mSidebarCapture.clear();
+            mSidebarCaptureW = mSidebarCaptureH = 0;
+        }
     }
 }
