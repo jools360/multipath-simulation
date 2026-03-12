@@ -13,11 +13,16 @@ A GNSS satellite signal multipath simulation tool. Loads a 3D building model (GL
 - BVH-accelerated ray tracing against 3D building geometry
 - Signal classification: LOS (green), blocked (red), reflected (orange)
 - Single-bounce specular reflection detection using mirror-image method
-- KML trajectory loading with animated playback along the route
+- Car body signal blocking via oriented bounding box aligned to heading
+- KML trajectory loading with Gaussian-smoothed playback along the route
+- GLB car model (default Ford Mustang Mach-E) with ground clamping and heading
 - Configurable model origin alignment (lat/lon/height) for trajectory overlay
 - Sky plot with colour-coded satellite positions
 - Signal analysis table with per-satellite status and multipath delay
-- Orbit camera with mouse controls (drag to orbit, middle-click to pan, scroll to zoom)
+- Adjustable IBL intensity for car/building lighting balance
+- Orbit camera with follow-behind mode during playback
+- MP4 video recording (F5) via FFmpeg NVENC HEVC with sidebar compositing
+- ImGui sidebar overlay on main window, toggled with Tab
 - Settings save/load for all parameters
 
 ### FilamentCone
@@ -143,8 +148,10 @@ Supports VIPS (AirPixel proprietary) and FreeD protocols over RS-232 or UDP. Aut
 | Scroll wheel | Zoom in/out |
 | Arrow keys | Move receiver horizontally |
 | A / Z | Move receiver up / down |
-| Tab | Toggle sidebar |
-| ESC | Exit |
+| Space | Play / pause trajectory playback |
+| Tab | Toggle sidebar visibility |
+| F5 | Toggle MP4 video recording |
+| Q / ESC | Exit |
 
 ## Project Structure
 
